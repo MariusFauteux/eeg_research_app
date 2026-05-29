@@ -1,0 +1,11 @@
+# Ganglion EEG Studio dependencies
+brainflow>=5.22
+PyQt6>=6.6
+pyqtgraph>=0.13
+bleak>=0.21
+numpy>=1.24
+scipy>=1.10
+
+# Optional: EDF/FIF export for downstream analysis (MNE).
+# The app runs fine without it; export menu entries are disabled if missing.
+mne>=1.5
