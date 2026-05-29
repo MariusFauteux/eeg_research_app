@@ -1,0 +1,231 @@
+"""Session view: toolbar, control panels, plot tabs, refresh timer, recording."""
+
+from __future__ import annotations
+
+from typing import List, Optional
+
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtWidgets import (
+    QFileDialog,
+    QHBoxLayout,
+    QLabel,
+    QMessageBox,
+    QPushButton,
+    QScrollArea,
+    QSpinBox,
+    QSplitter,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+)
+
+from ganglion_studio.core.board_manager import BoardManager
+from ganglion_studio.core.dsp import FilterSettings
+from ganglion_studio.core.session import MarkerEvent, SessionConfig, SessionRecorder
+from ganglion_studio.ui.widgets.accel_widget import AccelWidget
+from ganglion_studio.ui.widgets.band_power_widget import BandPowerWidget
+from ganglion_studio.ui.widgets.channel_panel import ChannelPanel
+from ganglion_studio.ui.widgets.filter_panel import FilterPanel
+from ganglion_studio.ui.widgets.impedance_widget import ImpedanceWidget
+from ganglion_studio.ui.widgets.marker_panel import MarkerPanel
+from ganglion_studio.ui.widgets.psd_widget import PSDWidget
+from ganglion_studio.ui.widgets.spectrogram_widget import SpectrogramWidget
+from ganglion_studio.ui.widgets.time_series import TimeSeriesWidget
+
+
+class SessionView(QWidget):
+    exit_session = pyqtSignal()
+
+    def __init__(self, manager: BoardManager, config: SessionConfig) -> None:
+        super().__init__()
+        self._manager = manager
+        self._config = config
+        self._settings = FilterSettings(notch_freq=config.notch_freq)
+        self._active: List[bool] = list(manager.channel_active)
+        self._recorder: Optional[SessionRecorder] = None
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(8, 8, 8, 8)
+        root.addLayout(self._build_toolbar())
+
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        root.addWidget(splitter, 1)
+
+        splitter.addWidget(self._build_left_panel())
+        splitter.addWidget(self._build_tabs())
+        splitter.addWidget(self._build_right_panel())
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        splitter.setStretchFactor(2, 0)
+        splitter.setSizes([260, 900, 320])
+
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._tick)
+        self._set_refresh(30)
+
+    # ----------------------------------------------------------- build UI
+    def _build_toolbar(self) -> QHBoxLayout:
+        bar = QHBoxLayout()
+        back_btn = QPushButton("\u25C0 Dashboard")
+        back_btn.clicked.connect(self._on_exit)
+        bar.addWidget(back_btn)
+
+        title = QLabel(f"  {self._config.name}")
+        title.setStyleSheet("font-weight:700; font-size:15px;")
+        bar.addWidget(title)
+        mode = "DEMO" if self._config.demo else "GANGLION"
+        tag = QLabel(mode)
+        tag.setStyleSheet(
+            "background:#4f8ef7; color:#fff; border-radius:4px; padding:2px 6px; font-weight:600;"
+            if not self._config.demo else
+            "background:#e2c044; color:#15171c; border-radius:4px; padding:2px 6px; font-weight:600;"
+        )
+        bar.addWidget(tag)
+        bar.addStretch(1)
+
+        self.pause_btn = QPushButton("Pause stream")
+        self.pause_btn.setCheckable(True)
+        self.pause_btn.toggled.connect(self._on_pause)
+        bar.addWidget(self.pause_btn)
+
+        self.record_btn = QPushButton("\u25CF Record")
+        self.record_btn.setCheckable(True)
+        self.record_btn.setStyleSheet("QPushButton:checked { background:#b03434; }")
+        self.record_btn.toggled.connect(self._on_record)
+        bar.addWidget(self.record_btn)
+
+        bar.addWidget(QLabel("Refresh"))
+        self.refresh_spin = QSpinBox()
+        self.refresh_spin.setRange(2, 60)
+        self.refresh_spin.setValue(30)
+        self.refresh_spin.setSuffix(" Hz")
+        self.refresh_spin.valueChanged.connect(self._set_refresh)
+        bar.addWidget(self.refresh_spin)
+
+        self.status_label = QLabel("")
+        self.status_label.setStyleSheet("color:#9aa0aa;")
+        bar.addWidget(self.status_label)
+        return bar
+
+    def _build_left_panel(self) -> QWidget:
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        self.channel_panel = ChannelPanel(self._manager)
+        self.channel_panel.channels_changed.connect(self._on_channels_changed)
+        layout.addWidget(self.channel_panel)
+
+        self.filter_panel = FilterPanel(self._config.notch_freq)
+        self.filter_panel.filters_changed.connect(self._on_filters_changed)
+        layout.addWidget(self.filter_panel)
+        layout.addStretch(1)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(container)
+        scroll.setFixedWidth(280)
+        return scroll
+
+    def _build_tabs(self) -> QTabWidget:
+        self.tabs = QTabWidget()
+        self.time_series = TimeSeriesWidget(self._manager)
+        self.psd = PSDWidget(self._manager)
+        self.spectrogram = SpectrogramWidget(self._manager)
+        self.impedance = ImpedanceWidget(self._manager)
+        self.band_power = BandPowerWidget(self._manager)
+        self.accel = AccelWidget(self._manager)
+
+        self.tabs.addTab(self.time_series, "Time Series")
+        self.tabs.addTab(self.psd, "PSD")
+        self.tabs.addTab(self.spectrogram, "Spectrogram / FFT")
+        self.tabs.addTab(self.impedance, "Impedance")
+        self.tabs.addTab(self.band_power, "Band Power")
+        self.tabs.addTab(self.accel, "Accel / Motion")
+        return self.tabs
+
+    def _build_right_panel(self) -> QWidget:
+        self.marker_panel = MarkerPanel(self)
+        self.marker_panel.marker_fired.connect(self._on_marker)
+        self.marker_panel.setFixedWidth(320)
+        return self.marker_panel
+
+    # --------------------------------------------------------------- logic
+    def _set_refresh(self, hz: int) -> None:
+        self._timer.start(max(16, int(1000 / hz)))
+
+    def _tick(self) -> None:
+        self._manager.poll()
+        current = self.tabs.currentWidget()
+        if hasattr(current, "update_plot"):
+            current.update_plot(self._settings, self._active)
+        self._update_status()
+
+    def _update_status(self) -> None:
+        rec = ""
+        if self._manager.recording:
+            secs = self._manager.recorded_sample_count() / max(1, self._manager.sampling_rate)
+            rec = f" | REC {secs:0.1f}s"
+        self.status_label.setText(
+            f"{self._manager.sampling_rate} Hz | {len(self._manager.eeg_channels)} ch{rec}"
+        )
+
+    def _on_filters_changed(self, settings: FilterSettings) -> None:
+        self._settings = settings
+
+    def _on_channels_changed(self, active: List[bool]) -> None:
+        self._active = active
+
+    def _on_pause(self, paused: bool) -> None:
+        if paused:
+            self._manager.stop()
+            self.pause_btn.setText("Resume stream")
+        else:
+            self._manager.start()
+            self.pause_btn.setText("Pause stream")
+
+    def _on_record(self, recording: bool) -> None:
+        if recording:
+            self._recorder = SessionRecorder(self._config)
+            self._recorder.begin()
+            self._manager.start_recording()
+        else:
+            self._save_recording()
+
+    def _save_recording(self) -> None:
+        if self._recorder is None:
+            return
+        raw = self._manager.stop_recording()
+        meta = {
+            "sampling_rate": self._manager.sampling_rate,
+            "board_id": self._manager.board_id,
+            "eeg_channels": self._manager.eeg_channels,
+            "channel_names": ["Ch1", "Ch2", "Ch3", "Ch4"][: len(self._manager.eeg_channels)],
+            "marker_channel": self._manager.marker_channel,
+        }
+        written = self._recorder.save(raw, meta)
+        QMessageBox.information(
+            self, "Recording saved",
+            "Saved files:\n" + "\n".join(written),
+        )
+        self._recorder = None
+
+    def _on_marker(self, code: int, label: str, ts: float) -> None:
+        self._manager.insert_marker(code)
+        if self._recorder is not None:
+            self._recorder.add_marker(MarkerEvent(timestamp=ts, code=code, label=label))
+
+    def _on_exit(self) -> None:
+        if self._manager.recording:
+            res = QMessageBox.question(
+                self, "Recording in progress",
+                "A recording is active. Save and exit?",
+            )
+            if res == QMessageBox.StandardButton.Yes:
+                self.record_btn.setChecked(False)
+        self.exit_session.emit()
+
+    def shutdown(self) -> None:
+        self._timer.stop()
+        if self._manager.recording:
+            self._manager.stop_recording()

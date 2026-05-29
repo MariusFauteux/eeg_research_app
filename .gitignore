@@ -1,3 +1,6 @@
+# Ganglion EEG Studio: recorded sessions
+recordings/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
