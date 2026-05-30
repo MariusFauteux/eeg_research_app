@@ -216,6 +216,48 @@ app.processEvents()
 assert win._processed is not None and win._processed.shape == loaded.eeg.shape
 print("processing window recompute ok")
 
+# --- Analysis report: channel typing, figures, comparison stats, save ---
+import matplotlib
+matplotlib.use("Agg")
+from ganglion_studio.core import analysis as A
+from ganglion_studio.ui.analysis_window import AnalysisWindow
+
+# Synthetic recording: 2 PEDOT EEG, 2 Ag/AgCl EEG, 1 ECG.
+na = sr2 * 30
+ta = np.arange(na) / sr2
+aeeg = np.random.randn(5, na) * 8 + 20 * np.sin(2 * np.pi * 10 * ta)
+aeeg[4] = 0.0
+for p in range(sr2 // 2, na, sr2):
+    aeeg[4, max(0, p - 3):p + 3] += 300 * np.hanning(6)
+ametas = [
+    A.ChannelMeta(0, "P1", "EEG", "PEDOT"),
+    A.ChannelMeta(1, "P2", "EEG", "PEDOT"),
+    A.ChannelMeta(2, "A1", "EEG", "Ag/AgCl (wet)"),
+    A.ChannelMeta(3, "A2", "EEG", "Ag/AgCl (dry)"),
+    A.ChannelMeta(4, "ECG", "ECG", "Other"),
+]
+assert A.comparison_available(ametas)
+agm = A.pair_agreement(aeeg[0], aeeg[2], sr2)
+assert all(np.isfinite([agm["r"], agm["rmse"], agm["mean_coherence_1_30"], agm["ba_bias"]]))
+gstats = A.group_band_stats(aeeg, sr2, ametas)
+assert "PEDOT" in gstats["groups"] and "Ag/AgCl" in gstats["groups"]
+print(f"analysis: r={agm['r']:.2f} coh={agm['mean_coherence_1_30']:.2f} "
+      f"groups={ {k: v['n'] for k, v in gstats['groups'].items()} } pvals={len(gstats.get('pvals', []))}")
+
+awin = AnalysisWindow(aeeg, aeeg.copy(), sr2, ametas, title="analysis-test")
+tab_titles = [awin.tabs.tabText(i) for i in range(awin.tabs.count())]
+assert "PEDOT vs Ag/AgCl" in tab_titles, tab_titles
+n_panels = len(awin._panels)
+print("analysis tabs:", tab_titles, "| panels:", n_panels)
+assert n_panels >= 8
+# Save one figure and switch source without error.
+atmp = tempfile.mkdtemp()
+awin._panels[0][1].figure().savefig(os.path.join(atmp, "fig0.png"), dpi=90)
+assert os.path.getsize(os.path.join(atmp, "fig0.png")) > 0
+awin.source_combo.setCurrentText("Original")
+app.processEvents()
+print("analysis window ok; figure saved")
+
 import shutil
 shutil.rmtree("recordings", ignore_errors=True)
 

@@ -34,6 +34,22 @@ all with full control over board, channels, filters and markers.
   **R-peak-locked median AAS** (R-peaks detected with `neurokit2`). Heavy steps
   run on a worker thread so the UI stays responsive. Steps whose optional backend
   is missing are disabled with a tooltip.
+- **Channel typing**: set each channel's type (EEG/ECG/EMG/MISC) and electrode
+  material (Ag/AgCl wet/dry, PEDOT, Other). An ECG-typed channel auto-fills the
+  AAS reference.
+
+### Analysis & electrode-characterization report
+- **Generate analysis plots** (Processing Lab) opens a tabbed, descriptive report:
+  - *EEG analysis*: Welch PSD (log-log, bands shaded), relative band-power bars,
+    per-channel quality/noise table.
+  - *Electrode characterization*: RMS noise and 50/60 Hz line-noise bars and a PSD
+    overlay, coloured by electrode material.
+  - *PEDOT vs Ag/AgCl* (shown when both are present): group-mean PSD +/- std,
+    band-power comparison with t-tests, and - for a selectable co-located pair -
+    magnitude-squared coherence, correlation scatter (r, RMSE), and a Bland-Altman
+    agreement plot.
+- Switch the report source between processed and original signal. Each figure has
+  its own Save (PNG/SVG/PDF) plus a Save-all option.
 
 ### Recording review & export
 - When you stop a recording, a **Review window** opens: browse the whole

@@ -29,8 +29,10 @@ from PyQt6.QtWidgets import (
 
 from ganglion_studio.core import board_config as cfg
 from ganglion_studio.core import processing as proc
+from ganglion_studio.core.analysis import CHANNEL_TYPES, ELECTRODES, ChannelMeta
 from ganglion_studio.core.dsp import FILTER_TYPES, compute_psd
 from ganglion_studio.core.recording_loader import LoadError, LoadedRecording, load_recording
+from ganglion_studio.ui.analysis_window import AnalysisWindow
 
 
 class ProcessingWorker(QThread):
@@ -65,6 +67,7 @@ class ProcessingWindow(QWidget):
         self._worker: Optional[ProcessingWorker] = None
         self._orig_curves: List[pg.PlotDataItem] = []
         self._proc_curves: List[pg.PlotDataItem] = []
+        self._analysis_windows: List[AnalysisWindow] = []
 
         self._avail = proc.available_methods()
 
@@ -108,6 +111,16 @@ class ProcessingWindow(QWidget):
         pf.addRow("Detrend", self.detrend_combo)
         layout.addWidget(pre_box)
 
+        # Per-channel type + electrode metadata (rebuilt on load).
+        self.channels_box = QGroupBox("Channels (type / electrode)")
+        self.channels_layout = QVBoxLayout(self.channels_box)
+        self._channels_hint = QLabel("Load a recording to configure channels.")
+        self._channels_hint.setStyleSheet("color:#9aa0aa; font-size:11px;")
+        self.channels_layout.addWidget(self._channels_hint)
+        self._type_combos: List[QComboBox] = []
+        self._elec_combos: List[QComboBox] = []
+        layout.addWidget(self.channels_box)
+
         layout.addWidget(self._build_filter_box())
         layout.addWidget(self._build_wavelet_box())
         layout.addWidget(self._build_asr_box())
@@ -116,6 +129,14 @@ class ProcessingWindow(QWidget):
         self.apply_btn = QPushButton("Apply")
         self.apply_btn.clicked.connect(self._recompute)
         layout.addWidget(self.apply_btn)
+
+        self.analysis_btn = QPushButton("Generate analysis plots")
+        self.analysis_btn.setToolTip(
+            "Open EEG analysis + electrode-characterization report for this recording"
+        )
+        self.analysis_btn.clicked.connect(self._open_analysis)
+        self.analysis_btn.setEnabled(False)
+        layout.addWidget(self.analysis_btn)
         self.status = QLabel("Load a recording to begin.")
         self.status.setWordWrap(True)
         self.status.setStyleSheet("color:#9aa0aa; font-size:11px;")
@@ -318,10 +339,81 @@ class ProcessingWindow(QWidget):
             self.aas_ref.addItem(f"{name}", i)
         self.aas_ref.blockSignals(False)
 
+        self._rebuild_channel_meta(rec)
         self._rebuild_curves()
         self.window_spin.setMaximum(max(2.0, dur))
+        self.analysis_btn.setEnabled(True)
         self._redraw_all()
         self._recompute()
+
+    def _open_analysis(self) -> None:
+        if self._rec is None:
+            return
+        processed = self._processed if self._processed is not None else self._rec.eeg
+        title = os.path.basename(self._rec.source_path) or "Recording"
+        window = AnalysisWindow(
+            processed=np.ascontiguousarray(processed),
+            original=np.ascontiguousarray(self._rec.eeg),
+            sampling_rate=self._rec.sampling_rate,
+            metas=self.channel_metas(),
+            title=title,
+        )
+        window.show()
+        window.raise_()
+        self._analysis_windows.append(window)
+
+    def _rebuild_channel_meta(self, rec: LoadedRecording) -> None:
+        # clear existing rows
+        while self.channels_layout.count():
+            item = self.channels_layout.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+        self._type_combos = []
+        self._elec_combos = []
+
+        header = QHBoxLayout()
+        for text in ("Channel", "Type", "Electrode"):
+            lab = QLabel(text)
+            lab.setStyleSheet("color:#9aa0aa; font-size:10px; font-weight:600;")
+            header.addWidget(lab, 1)
+        hw = QWidget()
+        hw.setLayout(header)
+        self.channels_layout.addWidget(hw)
+
+        for i, name in enumerate(rec.channel_names):
+            row = QHBoxLayout()
+            row.addWidget(QLabel(name), 1)
+            tcombo = QComboBox()
+            tcombo.addItems(CHANNEL_TYPES)
+            tcombo.currentTextChanged.connect(self._on_channel_meta_changed)
+            row.addWidget(tcombo, 1)
+            ecombo = QComboBox()
+            ecombo.addItems(ELECTRODES)
+            ecombo.currentTextChanged.connect(self._on_channel_meta_changed)
+            row.addWidget(ecombo, 1)
+            self._type_combos.append(tcombo)
+            self._elec_combos.append(ecombo)
+            rw = QWidget()
+            rw.setLayout(row)
+            self.channels_layout.addWidget(rw)
+
+    def channel_metas(self) -> List[ChannelMeta]:
+        if not self._rec:
+            return []
+        metas = []
+        for i, name in enumerate(self._rec.channel_names):
+            ctype = self._type_combos[i].currentText() if i < len(self._type_combos) else "EEG"
+            elec = self._elec_combos[i].currentText() if i < len(self._elec_combos) else ELECTRODES[0]
+            metas.append(ChannelMeta(index=i, name=name, ch_type=ctype, electrode=elec))
+        return metas
+
+    def _on_channel_meta_changed(self, *_args) -> None:
+        # If a channel is marked ECG, default the AAS reference to it.
+        for i, tcombo in enumerate(self._type_combos):
+            if tcombo.currentText() == "ECG":
+                self.aas_ref.setCurrentIndex(i)
+                break
 
     def _rebuild_curves(self) -> None:
         for c in self._orig_curves:
