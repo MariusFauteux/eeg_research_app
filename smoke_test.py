@@ -101,6 +101,60 @@ rec = mgr.recorded_sample_count()
 print("recorded samples:", rec)
 assert rec > sr, "recording did not capture continuous data"
 
+# Signal statistics panel.
+view.stats_panel.update_stats(view._settings, view._active)
+print("stats general:", view.stats_panel.general.text())
+assert view.stats_panel.table.item(0, 1).text() not in ("", "-"), "stats not populated"
+
+# Recording review + export.
+import tempfile
+import numpy as np
+from ganglion_studio.ui.review_window import ReviewWindow
+from ganglion_studio.core import exporter
+
+raw = mgr.recent(5.0)
+# Inject a couple of markers directly into the recorded marker row for review.
+mch = mgr.marker_channel
+raw[mch, 100] = 1
+raw[mch, 400] = 3
+meta = {
+    "sampling_rate": sr,
+    "eeg_channels": mgr.eeg_channels,
+    "channel_names": ["Ch1", "Ch2", "Ch3", "Ch4"][: len(mgr.eeg_channels)],
+    "marker_channel": mch,
+    "notch_freq": 50,
+}
+review = ReviewWindow(raw, meta, code_labels={1: "Eyes Open", 3: "Stimulus"},
+                      marker_types=view.marker_panel._types, title="smoke")
+n0 = len(review._markers)
+print("review markers extracted:", n0)
+assert n0 >= 2, "marker extraction failed"
+
+# Add then remove a marker.
+review._click_time = 1.0
+review._on_add_marker()
+assert len(review._markers) == n0 + 1, "add marker failed"
+review.table.selectRow(0)
+review._on_remove_marker()
+assert len(review._markers) == n0, "remove marker failed"
+print("marker edit ok ->", len(review._markers))
+
+# Exports.
+print("available formats:", exporter.available_formats())
+tmp = tempfile.mkdtemp()
+for fmt, ext in [("fif", ".fif"), ("set", ".set"), ("edf", ".edf")]:
+    path = os.path.join(tmp, f"rec{ext}")
+    out = exporter.export(path, fmt, raw, meta, review._markers)
+    assert os.path.exists(out), f"{fmt} not written"
+    print(f"exported {fmt}: {os.path.basename(out)} ({os.path.getsize(out)} bytes)")
+
+# GDF should fail gracefully without BioSig.
+try:
+    exporter.export(os.path.join(tmp, "rec.gdf"), "gdf", raw, meta, review._markers)
+    print("gdf: written (BioSig present)")
+except exporter.ExportError as e:
+    print("gdf gracefully unavailable:", str(e).splitlines()[0])
+
 view.shutdown()
 mgr.release()
 assert not (mgr._acq_thread and mgr._acq_thread.is_alive()), "acquisition thread not stopped"

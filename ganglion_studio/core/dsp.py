@@ -176,3 +176,40 @@ def signal_quality(channel: np.ndarray, sampling_rate: int) -> dict:
             band = (freqs > f0 - 2) & (freqs < f0 + 2)
             line_ratio = max(line_ratio, float(np.sum(mag[band]) / total))
     return {"rms": rms, "ptp": ptp, "railed": railed, "line_ratio": line_ratio}
+
+
+def dominant_frequency(channel: np.ndarray, sampling_rate: int,
+                       fmin: float = 1.0, fmax: float = 70.0) -> float:
+    """Frequency (Hz) of the strongest spectral component in [fmin, fmax]."""
+    freqs, mag = compute_fft(channel, sampling_rate)
+    if freqs.size == 0:
+        return 0.0
+    band = (freqs >= fmin) & (freqs <= fmax)
+    if not np.any(band):
+        return 0.0
+    sub_freqs = freqs[band]
+    sub_mag = mag[band]
+    return float(sub_freqs[int(np.argmax(sub_mag))])
+
+
+def quality_label(stats: dict) -> str:
+    """Map raw metrics to a contact-quality label: good / ok / bad."""
+    if stats.get("railed"):
+        return "bad"
+    ptp = stats.get("ptp", 0.0)
+    line = stats.get("line_ratio", 0.0)
+    if ptp > 1000.0 or line > 0.5:
+        return "bad"
+    if ptp > 200.0 or line > 0.25:
+        return "ok"
+    return "good"
+
+
+def channel_stats(channel: np.ndarray, sampling_rate: int) -> dict:
+    """Rich per-channel statistics for the live stats panel."""
+    data = _as_float(channel)
+    base = signal_quality(data, sampling_rate)
+    std = float(np.std(data)) if data.size else 0.0
+    dom = dominant_frequency(data, sampling_rate) if data.size else 0.0
+    base.update({"std": std, "dominant_hz": dom, "quality": quality_label(base)})
+    return base

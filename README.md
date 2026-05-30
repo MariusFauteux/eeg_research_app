@@ -17,6 +17,21 @@ all with full control over board, channels, filters and markers.
   (FW3 default / FW2 legacy / auto) and mains-notch region (50/60 Hz).
 - **Demo mode** (BrainFlow synthetic board) to explore the whole app with no hardware.
 
+### Live signal statistics
+- A left-column panel updates continuously with per-channel **RMS, peak-to-peak,
+  std, dominant frequency, mains-noise fraction and a contact-quality flag**
+  (good/ok/bad), plus general info (sampling rate, window, buffer fill, mean RMS).
+
+### Recording review & export
+- When you stop a recording, a **Review window** opens: browse the whole
+  recording (scroll, window/amplitude, optional display filter), see all markers,
+  and **add/remove** markers (click to place, choose a marker type).
+- **Save / Export** to research formats: **.fif** (MNE native, lossless),
+  **.set** (EEGLAB), **.edf** (European Data Format). Markers are written as
+  annotations. **.gdf** is offered best-effort via the optional BioSig toolkit
+  (MNE/standard Python libraries cannot write GDF); EDF is the recommended open
+  alternative. A lossless CSV + metadata + marker backup is always written too.
+
 ### Session view
 - **Live time series** - one trace per channel, with controls for window length,
   amplitude scale, auto-scale and marker overlays.

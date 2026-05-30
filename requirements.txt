@@ -6,6 +6,13 @@ bleak>=0.21
 numpy>=1.24
 scipy>=1.10
 
-# Optional: EDF/FIF export for downstream analysis (MNE).
-# The app runs fine without it; export menu entries are disabled if missing.
+# Optional: recording review/export to research formats.
+# The app runs fine without these; export entries are disabled if missing.
+#   mne     - native .fif save + export framework
+#   eeglabio - EEGLAB .set export (mne fmt="eeglab")
+#   edfio   - EDF .edf export (mne fmt="edf")
+# Note: .gdf writing is not supported by these libraries (GDF is read-only in
+# MNE); it is offered best-effort via the optional BioSig toolkit if installed.
 mne>=1.5
+eeglabio>=0.0.2
+edfio>=0.4
