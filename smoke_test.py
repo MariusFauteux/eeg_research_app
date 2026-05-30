@@ -155,6 +155,70 @@ try:
 except exporter.ExportError as e:
     print("gdf gracefully unavailable:", str(e).splitlines()[0])
 
+# --- Processing Lab: loader, pipeline, AAS, and window recompute ---
+from ganglion_studio.core import processing as P
+from ganglion_studio.core.recording_loader import load_recording
+from ganglion_studio.ui.processing_window import ProcessingWindow
+from ganglion_studio.core.session import SessionRecorder, SessionConfig as SC
+
+# Write a real recording file via the recorder, then load it back.
+rec_raw = mgr.recent(8.0)
+sr2 = mgr.sampling_rate
+rmeta = {
+    "sampling_rate": sr2,
+    "eeg_channels": mgr.eeg_channels,
+    "channel_names": ["Ch1", "Ch2", "Ch3", "Ch4"][: len(mgr.eeg_channels)],
+    "marker_channel": mgr.marker_channel,
+}
+rec = SessionRecorder(SC(name="proc-lab-test", demo=True))
+rec.begin()
+written = rec.save(rec_raw, rmeta)
+csv_path = [w for w in written if w.endswith("_raw.csv")][0]
+loaded = load_recording(csv_path)
+print("loaded:", loaded.n_channels, "ch", loaded.sampling_rate, "Hz", loaded.n_samples, "samp")
+assert loaded.n_channels == len(mgr.eeg_channels) and loaded.n_samples > 0
+
+# AAS: synthesize an ECG-like reference with known R-peaks + artifact, verify reduction.
+n2 = sr2 * 20
+tt = np.arange(n2) / sr2
+eeg2 = np.random.randn(4, n2) * 8 + 15 * np.sin(2 * np.pi * 10 * tt)
+beats = list(range(sr2 // 2, n2 - sr2, sr2))  # ~1 Hz
+for p in beats:
+    eeg2[0, p - 3:p + 3] += 300 * np.hanning(6)   # ECG ref channel
+    eeg2[1, p - 3:p + 3] += 100 * np.hanning(6)   # cardiac artifact in EEG
+peaks = P.detect_rpeaks(eeg2[0], sr2)
+print("R-peaks detected:", len(peaks), "expected ~", len(beats))
+assert abs(len(peaks) - len(beats)) <= 3, "R-peak detection off"
+aas_cfg = P.AasStepConfig(enabled=True, ref_channel=0, pre_ms=200, post_ms=400)
+cleaned, msg = P.apply_aas(eeg2, sr2, aas_cfg)
+art_before = np.ptp(eeg2[1])
+art_after = np.ptp(cleaned[1])
+print(f"AAS: {msg} | ch1 ptp {art_before:.0f} -> {art_after:.0f}")
+assert art_after < art_before, "AAS did not reduce the cardiac artifact"
+
+# Full pipeline incl ASR (meegkit) if available.
+cfg2 = P.ProcessingConfig(reref_car=True, detrend="linear")
+cfg2.wavelet.enabled = True
+cfg2.asr.enabled = P.available_methods()["asr"]
+cfg2.aas.enabled = True
+cfg2.aas.ref_channel = 0
+out2, msgs2 = P.apply_pipeline(eeg2, sr2, ["Ch1", "Ch2", "Ch3", "Ch4"], cfg2)
+assert out2.shape == eeg2.shape and np.isfinite(out2).all()
+print("pipeline steps:", " | ".join(msgs2))
+
+# Processing window: load a file and run one synchronous recompute.
+win = ProcessingWindow()
+win._load(csv_path)
+win.wavelet_box.setChecked(True)
+win._recompute()
+win._worker.wait(20000)
+app.processEvents()
+assert win._processed is not None and win._processed.shape == loaded.eeg.shape
+print("processing window recompute ok")
+
+import shutil
+shutil.rmtree("recordings", ignore_errors=True)
+
 view.shutdown()
 mgr.release()
 assert not (mgr._acq_thread and mgr._acq_thread.is_alive()), "acquisition thread not stopped"

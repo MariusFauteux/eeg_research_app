@@ -38,6 +38,7 @@ from ganglion_studio.ui.widgets.time_series import TimeSeriesWidget
 
 class SessionView(QWidget):
     exit_session = pyqtSignal()
+    open_processing = pyqtSignal()
 
     def __init__(self, manager: BoardManager, config: SessionConfig) -> None:
         super().__init__()
@@ -90,6 +91,11 @@ class SessionView(QWidget):
         )
         bar.addWidget(tag)
         bar.addStretch(1)
+
+        lab_btn = QPushButton("Processing Lab")
+        lab_btn.setToolTip("Open the offline processing playground")
+        lab_btn.clicked.connect(self.open_processing.emit)
+        bar.addWidget(lab_btn)
 
         self.pause_btn = QPushButton("Pause stream")
         self.pause_btn.setCheckable(True)

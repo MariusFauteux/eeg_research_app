@@ -16,3 +16,11 @@ scipy>=1.10
 mne>=1.5
 eeglabio>=0.0.2
 edfio>=0.4
+
+# Optional: Processing Lab algorithms.
+#   meegkit   - Artifact Subspace Reconstruction (ASR)
+#   neurokit2 - ECG R-peak detection for R-peak-locked AAS artifact removal
+# Wavelet denoising uses BrainFlow (already required). Controls are disabled in
+# the UI if the corresponding backend is not installed.
+meegkit>=0.1.7
+neurokit2>=0.2

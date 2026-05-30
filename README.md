@@ -22,6 +22,19 @@ all with full control over board, channels, filters and markers.
   std, dominant frequency, mains-noise fraction and a contact-quality flag**
   (good/ok/bad), plus general info (sampling rate, window, buffer fill, mean RMS).
 
+### Processing Lab (offline)
+- Open the **Processing Lab** any time (button on the dashboard, or in the session
+  toolbar) to load a saved recording (`.csv`+meta / `.fif` / `.edf` / `.set` / `.gdf`)
+  and experiment with a preprocessing pipeline. Configuration is on the left;
+  the **original** signal is shown top-right and the **processed** signal
+  bottom-right (time or PSD view, linked time axis).
+- Pipeline (each step independently toggleable): common-average re-reference ->
+  detrend -> filters (band-pass + notch) -> wavelet denoising (BrainFlow) ->
+  ASR (Artifact Subspace Reconstruction, `meegkit`) -> ECG removal by
+  **R-peak-locked median AAS** (R-peaks detected with `neurokit2`). Heavy steps
+  run on a worker thread so the UI stays responsive. Steps whose optional backend
+  is missing are disabled with a tooltip.
+
 ### Recording review & export
 - When you stop a recording, a **Review window** opens: browse the whole
   recording (scroll, window/amplitude, optional display filter), see all markers,

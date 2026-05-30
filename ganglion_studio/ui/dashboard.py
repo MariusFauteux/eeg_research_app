@@ -50,6 +50,7 @@ class Dashboard(QWidget):
     """Connection / session-setup screen."""
 
     start_session = pyqtSignal(object)  # emits SessionConfig
+    open_processing = pyqtSignal()  # request to open the Processing Lab
 
     def __init__(self) -> None:
         super().__init__()
@@ -66,8 +67,17 @@ class Dashboard(QWidget):
         title.setStyleSheet("font-size: 26px; font-weight: 700; color: #4f8ef7;")
         subtitle = QLabel("Connect to your OpenBCI Ganglion over native Bluetooth")
         subtitle.setStyleSheet("color: #9aa0aa;")
-        root.addWidget(title)
-        root.addWidget(subtitle)
+        header = QHBoxLayout()
+        header_text = QVBoxLayout()
+        header_text.addWidget(title)
+        header_text.addWidget(subtitle)
+        header.addLayout(header_text)
+        header.addStretch(1)
+        self.processing_btn = QPushButton("Processing Lab")
+        self.processing_btn.setToolTip("Open the offline processing playground (no board needed)")
+        self.processing_btn.clicked.connect(self.open_processing.emit)
+        header.addWidget(self.processing_btn, alignment=Qt.AlignmentFlag.AlignTop)
+        root.addLayout(header)
 
         body = QHBoxLayout()
         body.setSpacing(20)
