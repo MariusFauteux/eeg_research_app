@@ -21,6 +21,9 @@ from ganglion_studio.core.dsp import FilterSettings
 
 
 class ImpedanceWidget(QWidget):
+    # Impedance changes slowly; refreshing a few times per second is plenty.
+    refresh_hz = 8.0
+
     def __init__(self, manager: BoardManager) -> None:
         super().__init__()
         self._manager = manager

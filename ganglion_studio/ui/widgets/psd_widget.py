@@ -21,6 +21,9 @@ from ganglion_studio.core.dsp import FilterSettings, apply_filters, compute_psd
 
 
 class PSDWidget(QWidget):
+    # Spectral estimate is expensive and slow-moving; no need for 30 fps.
+    refresh_hz = 5.0
+
     def __init__(self, manager: BoardManager) -> None:
         super().__init__()
         self._manager = manager

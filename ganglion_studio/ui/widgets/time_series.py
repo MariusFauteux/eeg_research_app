@@ -47,7 +47,10 @@ class TimeSeriesWidget(QWidget):
             curve = p.plot(pen=pg.mkPen(color, width=1))
             self._plots.append(p)
             self._curves.append(curve)
-        self._marker_lines: List[pg.InfiniteLine] = []
+        # Marker overlay: (line, plot) pairs are reused across frames; we only
+        # rebuild the pool when the marker count or visible-plot set changes.
+        self._marker_lines: List = []
+        self._marker_state = None
 
     def _build_controls(self) -> QHBoxLayout:
         bar = QHBoxLayout()
@@ -76,10 +79,12 @@ class TimeSeriesWidget(QWidget):
 
     def update_plot(self, settings: FilterSettings, active: List[bool]) -> None:
         seconds = self.window_spin.value()
-        data = self._manager.recent_eeg(seconds)
+        # One locked buffer copy per frame, reused for both traces and markers.
+        full = self._manager.recent(seconds)
+        eeg_rows = self._manager.eeg_channels
         sr = self._manager.sampling_rate
         amp = self.amp_spin.value()
-        n = data.shape[1]
+        n = full.shape[1]
         t = np.arange(n) / sr if n else np.array([])
 
         for i in range(self._n):
@@ -88,7 +93,7 @@ class TimeSeriesWidget(QWidget):
             if not visible or n == 0:
                 self._curves[i].clear()
                 continue
-            filtered = apply_filters(data[i], sr, settings)
+            filtered = apply_filters(full[eeg_rows[i]], sr, settings)
             self._curves[i].setData(t, filtered)
             if self.autoscale.isChecked():
                 self._plots[i].enableAutoRange(axis="y")
@@ -97,23 +102,39 @@ class TimeSeriesWidget(QWidget):
             if n:
                 self._plots[i].setXRange(t[0], t[-1], padding=0)
 
-        self._draw_markers(seconds, t)
+        marker_row = None
+        mch = self._manager.marker_channel
+        if n and mch < full.shape[0]:
+            marker_row = full[mch]
+        self._draw_markers(t, sr, marker_row)
 
-    def _draw_markers(self, seconds: float, t: np.ndarray) -> None:
-        for line in self._marker_lines:
-            for p in self._plots:
-                p.removeItem(line)
-        self._marker_lines.clear()
-        if not self.show_markers.isChecked() or t.size == 0:
+    def _clear_marker_lines(self) -> None:
+        for line, plot in self._marker_lines:
+            plot.removeItem(line)
+        self._marker_lines = []
+        self._marker_state = None
+
+    def _draw_markers(self, t: np.ndarray, sr: int, marker_row) -> None:
+        if not self.show_markers.isChecked() or marker_row is None or t.size == 0:
+            if self._marker_lines:
+                self._clear_marker_lines()
             return
-        idx, _codes = self._manager.recent_markers(seconds)
-        sr = self._manager.sampling_rate
-        n = t.size
-        for mi in idx:
-            x = mi / sr
-            for p in self._plots:
-                if not p.isVisible():
-                    continue
-                line = pg.InfiniteLine(pos=x, angle=90, pen=pg.mkPen("#f7766f", width=1, style=pg.QtCore.Qt.PenStyle.DashLine))
-                p.addItem(line)
-                self._marker_lines.append(line)
+        xs = np.flatnonzero(marker_row != 0) / sr
+        visible = tuple(i for i in range(self._n) if self._plots[i].isVisible())
+        state = (len(xs), visible)
+        if state != self._marker_state:
+            self._clear_marker_lines()
+            for _x in xs:
+                for pi in visible:
+                    line = pg.InfiniteLine(
+                        angle=90,
+                        pen=pg.mkPen("#f7766f", width=1, style=pg.QtCore.Qt.PenStyle.DashLine),
+                    )
+                    self._plots[pi].addItem(line)
+                    self._marker_lines.append((line, self._plots[pi]))
+            self._marker_state = state
+        k = 0
+        for x in xs:
+            for _pi in visible:
+                self._marker_lines[k][0].setValue(float(x))
+                k += 1

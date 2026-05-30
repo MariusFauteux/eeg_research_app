@@ -15,6 +15,8 @@ _BAND_COLORS = ["#b48ef7", "#4f8ef7", "#5fd38d", "#e2c044", "#f7766f"]
 
 
 class BandPowerWidget(QWidget):
+    refresh_hz = 4.0
+
     def __init__(self, manager: BoardManager) -> None:
         super().__init__()
         self._manager = manager

@@ -4,15 +4,18 @@ The :class:`BoardManager` owns the BrainFlow ``BoardShim`` and a single ring
 buffer that always holds the most recent ``buffer_seconds`` of *raw* data for
 every BrainFlow row (EEG, accel, resistance, marker, timestamp, ...).
 
-A single producer (the :meth:`poll` method, driven by a Qt timer) pulls new
-samples with ``get_board_data`` (which removes them from BrainFlow's internal
-buffer) and appends them to the ring buffer and, when recording, to a record
-buffer. All visualization widgets are pure consumers that read recent slices.
+A single producer (the :meth:`poll` method, driven by a dedicated acquisition
+thread) pulls new samples with ``get_board_data`` (which removes them from
+BrainFlow's internal buffer) and appends them to the ring buffer and, when
+recording, to a record buffer. All visualization widgets are pure consumers
+that read recent slices. A lock serializes the (thread) producer against the
+(GUI thread) consumers.
 """
 
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import List, Optional
@@ -68,9 +71,18 @@ class BoardManager:
 
     recording: bool = field(default=False, init=False)
     _record_chunks: List[np.ndarray] = field(default_factory=list, init=False)
+    _record_count: int = field(default=0, init=False)
 
     # demo impedance simulation state
     _demo_imp: Optional[np.ndarray] = field(default=None, init=False)
+
+    # Serializes the acquisition thread (producer) against GUI-thread readers.
+    _lock: threading.Lock = field(default_factory=threading.Lock, init=False)
+
+    # Background acquisition thread.
+    acquisition_hz: float = 60.0
+    _acq_thread: Optional[threading.Thread] = field(default=None, init=False)
+    _acq_stop: threading.Event = field(default_factory=threading.Event, init=False)
 
     # ------------------------------------------------------------------ setup
     def _resolve_board_id(self) -> int:
@@ -135,6 +147,7 @@ class BoardManager:
         self.streaming = False
 
     def release(self) -> None:
+        self.stop_acquisition()
         self.stop()
         if self.board is not None:
             try:
@@ -142,6 +155,33 @@ class BoardManager:
             except BrainFlowError as exc:  # pragma: no cover
                 logger.warning("release_session failed: %s", exc)
         self.board = None
+
+    # ----------------------------------------------------------- acquisition
+    def start_acquisition(self) -> None:
+        """Run :meth:`poll` on a dedicated thread, decoupled from rendering."""
+        if self._acq_thread is not None and self._acq_thread.is_alive():
+            return
+        self._acq_stop.clear()
+        self._acq_thread = threading.Thread(
+            target=self._acq_loop, name="ganglion-acquisition", daemon=True
+        )
+        self._acq_thread.start()
+
+    def stop_acquisition(self) -> None:
+        self._acq_stop.set()
+        thread = self._acq_thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=2.0)
+        self._acq_thread = None
+
+    def _acq_loop(self) -> None:
+        period = 1.0 / max(1.0, self.acquisition_hz)
+        while not self._acq_stop.is_set():
+            try:
+                self.poll()
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning("acquisition poll error: %s", exc)
+            self._acq_stop.wait(period)
 
     # --------------------------------------------------------------- polling
     def poll(self) -> int:
@@ -160,10 +200,11 @@ class BoardManager:
         if self.demo:
             data = self._inject_demo_resistance(data)
 
-        if self.recording:
-            self._record_chunks.append(data.copy())
-
-        self._append_ring(data)
+        with self._lock:
+            if self.recording:
+                self._record_chunks.append(data.copy())
+                self._record_count += n
+            self._append_ring(data)
         return n
 
     def _append_ring(self, data: np.ndarray) -> None:
@@ -193,10 +234,11 @@ class BoardManager:
     # --------------------------------------------------------------- readers
     def recent(self, seconds: float) -> np.ndarray:
         """Return the most recent ``seconds`` of the full row matrix (copy)."""
-        if self._ring is None or self._filled == 0:
-            return np.zeros((self.num_rows, 0))
-        n = min(self._filled, max(1, int(seconds * self.sampling_rate)))
-        return self._ring[:, -n:].copy()
+        with self._lock:
+            if self._ring is None or self._filled == 0:
+                return np.zeros((self.num_rows, 0))
+            n = min(self._filled, max(1, int(seconds * self.sampling_rate)))
+            return self._ring[:, -n:].copy()
 
     def recent_eeg(self, seconds: float) -> np.ndarray:
         data = self.recent(seconds)
@@ -271,14 +313,19 @@ class BoardManager:
 
     # ------------------------------------------------------------ recording
     def start_recording(self) -> None:
-        self._record_chunks = []
-        self.recording = True
+        with self._lock:
+            self._record_chunks = []
+            self._record_count = 0
+            self.recording = True
 
     def stop_recording(self) -> np.ndarray:
-        self.recording = False
-        if not self._record_chunks:
+        with self._lock:
+            self.recording = False
+            chunks = self._record_chunks
+            self._record_chunks = []
+        if not chunks:
             return np.zeros((self.num_rows, 0))
-        return np.concatenate(self._record_chunks, axis=1)
+        return np.concatenate(chunks, axis=1)
 
     def recorded_sample_count(self) -> int:
-        return int(sum(c.shape[1] for c in self._record_chunks))
+        return self._record_count

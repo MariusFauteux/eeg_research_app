@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import List, Optional
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
@@ -58,6 +59,10 @@ class SessionView(QWidget):
         splitter.setStretchFactor(1, 1)
         splitter.setStretchFactor(2, 0)
         splitter.setSizes([260, 900, 320])
+
+        # Acquisition runs on its own thread; the GUI timer only renders.
+        self._manager.start_acquisition()
+        self._last_status = 0.0
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
@@ -155,13 +160,31 @@ class SessionView(QWidget):
         self._timer.start(max(16, int(1000 / hz)))
 
     def _tick(self) -> None:
-        self._manager.poll()
+        # Data acquisition happens on the background thread; here we only
+        # render the visible tab, throttled to its own preferred rate.
         current = self.tabs.currentWidget()
-        if hasattr(current, "update_plot"):
+        if hasattr(current, "update_plot") and self._due(current):
             current.update_plot(self._settings, self._active)
         self._update_status()
 
+    @staticmethod
+    def _due(widget) -> bool:
+        """Rate-limit a widget to its ``refresh_hz`` (default: every tick)."""
+        hz = getattr(widget, "refresh_hz", None)
+        if not hz:
+            return True
+        now = time.monotonic()
+        last = getattr(widget, "_last_render", 0.0)
+        if now - last >= (1.0 / hz) - 1e-3:
+            widget._last_render = now
+            return True
+        return False
+
     def _update_status(self) -> None:
+        now = time.monotonic()
+        if now - self._last_status < 0.5:  # throttle status to ~2 Hz
+            return
+        self._last_status = now
         rec = ""
         if self._manager.recording:
             secs = self._manager.recorded_sample_count() / max(1, self._manager.sampling_rate)
@@ -227,5 +250,6 @@ class SessionView(QWidget):
 
     def shutdown(self) -> None:
         self._timer.stop()
+        self._manager.stop_acquisition()
         if self._manager.recording:
             self._manager.stop_recording()
