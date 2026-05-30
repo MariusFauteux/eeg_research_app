@@ -81,6 +81,18 @@ python -m ganglion_studio.main
 - If your board has firmware v2, choose **2 (legacy)** in the firmware selector
   (this sets `BrainFlowInputParams.other_info = "fw:2"`).
 
+## Troubleshooting Bluetooth
+- Scanning runs in an isolated helper subprocess (`python -m ganglion_studio.core.ble_scanner`).
+  This is required on macOS (CoreBluetooth must run on a process main thread) and
+  ensures a BLE-stack crash can never take down the app - you get a "scan failed"
+  message instead. You can run that command directly to debug discovery.
+- **macOS**: grant the terminal/app Bluetooth permission when prompted (System
+  Settings -> Privacy & Security -> Bluetooth); use 12.3+.
+- **Linux**: BlueZ must be running (`systemctl status bluetooth`); the
+  `org.bluez ... not provided` error means the Bluetooth service is not up.
+- **Windows**: 10.0.19041.0+ works without extra setup.
+- If scanning is unavailable, you can still enter the board MAC manually or use Demo mode.
+
 ## Notes
 - The cloud/CI environment used to develop this app has no Bluetooth radio, so real
   hardware streaming must be validated on your own machine. The full UI and data
