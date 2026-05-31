@@ -27,7 +27,7 @@ class ChannelPanel(QGroupBox):
         self._checks: List[QCheckBox] = []
         layout = QVBoxLayout(self)
 
-        names = cfg.DEFAULT_CHANNEL_NAMES
+        names = manager.channel_names
         for i, _ch in enumerate(manager.eeg_channels):
             row = QHBoxLayout()
             swatch = QLabel("  ")
@@ -43,6 +43,11 @@ class ChannelPanel(QGroupBox):
             row.addStretch(1)
             layout.addLayout(row)
         layout.addStretch(1)
+
+    def set_channel_names(self, names: List[str]) -> None:
+        for i, chk in enumerate(self._checks):
+            if i < len(names):
+                chk.setText(names[i])
 
     def _on_toggle(self, index: int, state: bool) -> None:
         self._manager.set_channel_active(index, state)

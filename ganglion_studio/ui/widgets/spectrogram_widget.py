@@ -56,12 +56,16 @@ class SpectrogramWidget(QWidget):
         self._fft_plot.showGrid(x=True, y=True, alpha=0.2)
         self._fft_curve = self._fft_plot.plot(pen=pg.mkPen("#4f8ef7", width=1.5))
 
+    def set_channel_names(self, names: List[str]) -> None:
+        for i in range(min(self.ch_combo.count(), len(names))):
+            self.ch_combo.setItemText(i, names[i])
+
     def _build_controls(self) -> QHBoxLayout:
         bar = QHBoxLayout()
         bar.addWidget(QLabel("Channel"))
         self.ch_combo = QComboBox()
         for i in range(self._n):
-            self.ch_combo.addItem(cfg.DEFAULT_CHANNEL_NAMES[i])
+            self.ch_combo.addItem(self._manager.channel_names[i])
         bar.addWidget(self.ch_combo)
 
         bar.addWidget(QLabel("Window"))

@@ -16,19 +16,21 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 from scipy.signal import coherence as _coherence
-from scipy.stats import pearsonr, ttest_ind
+from scipy.signal import correlate as _correlate
+from scipy.stats import pearsonr, spearmanr, ttest_ind
 
 from matplotlib.figure import Figure
 
 from .dsp import EEG_BANDS, compute_psd, dominant_frequency, signal_quality
 
 CHANNEL_TYPES = ["EEG", "ECG", "EMG", "MISC"]
-ELECTRODES = ["Ag/AgCl (wet)", "Ag/AgCl (dry)", "PEDOT", "Other"]
+ELECTRODES = ["Ag/AgCl (wet)", "Ag/AgCl (dry)", "PEDOT:PSS", "PEDOT", "Other"]
 
 _ELECTRODE_COLORS = {
     "Ag/AgCl (wet)": "#4f8ef7",
     "Ag/AgCl (dry)": "#5fd38d",
-    "PEDOT": "#f7766f",
+    "PEDOT:PSS": "#f7766f",
+    "PEDOT": "#e2722c",
     "Other": "#9aa0aa",
 }
 
@@ -39,6 +41,7 @@ class ChannelMeta:
     name: str
     ch_type: str = "EEG"
     electrode: str = "Ag/AgCl (wet)"
+    enabled: bool = True
 
     @property
     def is_eeg(self) -> bool:
@@ -46,7 +49,7 @@ class ChannelMeta:
 
     @property
     def is_pedot(self) -> bool:
-        return self.electrode == "PEDOT"
+        return self.electrode.startswith("PEDOT")
 
     @property
     def is_agagcl(self) -> bool:
@@ -106,23 +109,38 @@ def pair_agreement(x: np.ndarray, y: np.ndarray, sampling_rate: int) -> dict:
         r, _p = pearsonr(x, y)
     except Exception:
         r = float("nan")
+    try:
+        rho, _ps = spearmanr(x, y)
+    except Exception:
+        rho = float("nan")
     rmse = float(np.sqrt(np.mean((x - y) ** 2)))
+    rng = float(np.ptp(np.concatenate([x, y]))) + 1e-12
+    nrmse = rmse / rng
     nperseg = int(min(256, max(32, n // 8)))
     f, cxy = _coherence(x, y, fs=sampling_rate, nperseg=nperseg)
     band_mask = (f >= 1.0) & (f <= 30.0)
     mean_coh = float(np.mean(cxy[band_mask])) if np.any(band_mask) else float("nan")
+    band_coh = {}
+    for name, lo, hi in EEG_BANDS:
+        m = (f >= lo) & (f < hi)
+        band_coh[name] = float(np.mean(cxy[m])) if np.any(m) else float("nan")
     diff = x - y
     bias = float(np.mean(diff))
     sd = float(np.std(diff))
     return {
         "r": float(r),
+        "spearman": float(rho),
         "rmse": rmse,
+        "nrmse": float(nrmse),
         "coh_freqs": f,
         "coherence": cxy,
         "mean_coherence_1_30": mean_coh,
+        "band_coherence": band_coh,
         "ba_bias": bias,
         "ba_loa_low": bias - 1.96 * sd,
         "ba_loa_high": bias + 1.96 * sd,
+        "rms_x": float(np.sqrt(np.mean((x - x.mean()) ** 2))),
+        "rms_y": float(np.sqrt(np.mean((y - y.mean()) ** 2))),
     }
 
 
@@ -368,6 +386,133 @@ def fig_cmp_bland_altman(x: np.ndarray, y: np.ndarray, ag: dict,
     ax.set_title("Bland-Altman agreement")
     ax.legend(fontsize=8)
     ax.grid(True, alpha=0.2)
+    return fig
+
+
+def fig_pair_timeseries(x: np.ndarray, y: np.ndarray, sr: int,
+                        label_x: str, label_y: str, window_s: float = 5.0) -> Figure:
+    fig = _new_fig(8.0, 4.0)
+    ax = fig.add_subplot(111)
+    n = int(min(len(x), len(y), window_s * sr))
+    t = np.arange(n) / sr
+    ax.plot(t, x[:n], color="#f7766f", lw=0.9, label=label_x)
+    ax.plot(t, y[:n], color="#4f8ef7", lw=0.9, label=label_y)
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("Amplitude (uV)")
+    ax.set_title(f"Overlaid time series (first {window_s:.0f} s)")
+    ax.legend(fontsize=9)
+    ax.grid(True, alpha=0.2)
+    return fig
+
+
+def fig_pair_psd(x: np.ndarray, y: np.ndarray, sr: int,
+                 label_x: str, label_y: str) -> Figure:
+    fig = _new_fig()
+    ax = fig.add_subplot(111)
+    fx, px = compute_psd(np.ascontiguousarray(x), sr)
+    fy, py = compute_psd(np.ascontiguousarray(y), sr)
+    if fx.size:
+        ax.semilogy(fx, px, color="#f7766f", lw=1.4, label=label_x)
+    if fy.size:
+        ax.semilogy(fy, py, color="#4f8ef7", lw=1.4, label=label_y)
+    ax.set_xlim(0, min(70, sr / 2))
+    ax.set_xlabel("Frequency (Hz)")
+    ax.set_ylabel(r"PSD ($\mu V^2$/Hz)")
+    ax.set_title(f"PSD overlay: {label_x} vs {label_y}")
+    ax.grid(True, which="both", alpha=0.2)
+    ax.legend(fontsize=9)
+    return fig
+
+
+def fig_pair_histogram(x: np.ndarray, y: np.ndarray,
+                       label_x: str, label_y: str) -> Figure:
+    fig = _new_fig(7.0, 4.0)
+    ax = fig.add_subplot(111)
+    lim = float(np.percentile(np.abs(np.concatenate([x, y])), 99)) or 1.0
+    bins = np.linspace(-lim, lim, 80)
+    ax.hist(x, bins=bins, color="#f7766f", alpha=0.5, label=label_x, density=True)
+    ax.hist(y, bins=bins, color="#4f8ef7", alpha=0.5, label=label_y, density=True)
+    ax.set_xlabel("Amplitude (uV)")
+    ax.set_ylabel("Density")
+    ax.set_title("Amplitude distribution")
+    ax.legend(fontsize=9)
+    ax.grid(True, alpha=0.2)
+    return fig
+
+
+def fig_pair_cross_correlation(x: np.ndarray, y: np.ndarray, sr: int,
+                               label_x: str, label_y: str,
+                               max_lag_s: float = 0.5) -> Figure:
+    fig = _new_fig(7.0, 4.0)
+    ax = fig.add_subplot(111)
+    n = min(len(x), len(y))
+    a = (x[:n] - x[:n].mean())
+    b = (y[:n] - y[:n].mean())
+    denom = (np.std(a) * np.std(b) * n) + 1e-12
+    corr = _correlate(a, b, mode="full") / denom
+    lags = np.arange(-n + 1, n) / sr
+    m = np.abs(lags) <= max_lag_s
+    ax.plot(lags[m] * 1000.0, corr[m], color="#5fd38d", lw=1.2)
+    peak_lag = lags[m][int(np.argmax(corr[m]))] * 1000.0
+    ax.axvline(peak_lag, color="gray", ls=":", lw=0.8)
+    ax.set_xlabel("Lag (ms)")
+    ax.set_ylabel("Normalized cross-correlation")
+    ax.set_title(f"Cross-correlation: {label_x} vs {label_y} (peak at {peak_lag:.1f} ms)")
+    ax.grid(True, alpha=0.2)
+    return fig
+
+
+def fig_pair_bandpower_ratio(x: np.ndarray, y: np.ndarray, sr: int,
+                             label_x: str, label_y: str) -> Figure:
+    fig = _new_fig(7.0, 4.0)
+    ax = fig.add_subplot(111)
+    fx, px = compute_psd(np.ascontiguousarray(x), sr)
+    fy, py = compute_psd(np.ascontiguousarray(y), sr)
+    names = [b[0] for b in EEG_BANDS]
+    bx = _band_powers(fx, px) if fx.size else {n: 0.0 for n in names}
+    by = _band_powers(fy, py) if fy.size else {n: 0.0 for n in names}
+    idx = np.arange(len(names))
+    w = 0.38
+    ax.bar(idx - w / 2, [bx[n] for n in names], w, color="#f7766f", label=label_x)
+    ax.bar(idx + w / 2, [by[n] for n in names], w, color="#4f8ef7", label=label_y)
+    ax.set_yscale("log")
+    ax.set_xticks(idx)
+    ax.set_xticklabels(names)
+    ax.set_ylabel(r"Band power ($\mu V^2$)")
+    ax.set_title("Absolute band power by channel")
+    ax.legend(fontsize=9)
+    return fig
+
+
+def fig_pair_stats_table(x: np.ndarray, y: np.ndarray, sr: int, ag: dict,
+                         label_x: str, label_y: str) -> Figure:
+    mx = channel_metrics(x, sr)
+    my = channel_metrics(y, sr)
+    rows = [
+        ["Pearson r", f"{ag['r']:.3f}"],
+        ["Spearman rho", f"{ag['spearman']:.3f}"],
+        ["RMSE (uV)", f"{ag['rmse']:.2f}"],
+        ["NRMSE", f"{ag['nrmse']:.3f}"],
+        ["Mean coherence (1-30 Hz)", f"{ag['mean_coherence_1_30']:.3f}"],
+        ["Bland-Altman bias (uV)", f"{ag['ba_bias']:.2f}"],
+        ["Bland-Altman LoA (uV)", f"[{ag['ba_loa_low']:.1f}, {ag['ba_loa_high']:.1f}]"],
+        [f"RMS {label_x} / {label_y} (uV)", f"{mx['rms']:.1f} / {my['rms']:.1f}"],
+        [f"Line noise {label_x} / {label_y} (%)",
+         f"{mx['line_ratio'] * 100:.0f} / {my['line_ratio'] * 100:.0f}"],
+        [f"SNR {label_x} / {label_y} (dB)", f"{mx['snr_db']:.1f} / {my['snr_db']:.1f}"],
+    ]
+    for name in [b[0] for b in EEG_BANDS]:
+        rows.append([f"Coherence {name}", f"{ag['band_coherence'].get(name, float('nan')):.3f}"])
+
+    fig = _new_fig(6.5, 0.45 * (len(rows) + 1))
+    ax = fig.add_subplot(111)
+    ax.axis("off")
+    table = ax.table(cellText=rows, colLabels=["Metric", "Value"],
+                     loc="center", cellLoc="left")
+    table.auto_set_font_size(False)
+    table.set_fontsize(9)
+    table.scale(1, 1.3)
+    ax.set_title(f"Comparison statistics: {label_x} vs {label_y}")
     return fig
 
 

@@ -37,7 +37,7 @@ class TimeSeriesWidget(QWidget):
         for i in range(self._n):
             p = self._glw.addPlot(row=i, col=0)
             p.showGrid(x=True, y=True, alpha=0.2)
-            p.setLabel("left", cfg.DEFAULT_CHANNEL_NAMES[i], units="uV")
+            p.setLabel("left", self._manager.channel_names[i], units="uV")
             p.setMouseEnabled(x=False, y=True)
             if i < self._n - 1:
                 p.getAxis("bottom").setStyle(showValues=False)
@@ -51,6 +51,11 @@ class TimeSeriesWidget(QWidget):
         # rebuild the pool when the marker count or visible-plot set changes.
         self._marker_lines: List = []
         self._marker_state = None
+
+    def set_channel_names(self, names: List[str]) -> None:
+        for i, p in enumerate(self._plots):
+            if i < len(names):
+                p.setLabel("left", names[i], units="uV")
 
     def _build_controls(self) -> QHBoxLayout:
         bar = QHBoxLayout()

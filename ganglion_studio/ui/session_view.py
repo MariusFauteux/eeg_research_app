@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import (
 from ganglion_studio.core.board_manager import BoardManager
 from ganglion_studio.core.dsp import FilterSettings
 from ganglion_studio.core.session import MarkerEvent, SessionConfig, SessionRecorder
+from ganglion_studio.ui.channel_setup_dialog import ChannelSetupDialog
 from ganglion_studio.ui.review_window import ReviewWindow
 from ganglion_studio.ui.widgets.accel_widget import AccelWidget
 from ganglion_studio.ui.widgets.band_power_widget import BandPowerWidget
@@ -91,6 +92,11 @@ class SessionView(QWidget):
         )
         bar.addWidget(tag)
         bar.addStretch(1)
+
+        setup_btn = QPushButton("Channel setup")
+        setup_btn.setToolTip("Set channel type, electrode and 10-20 placement")
+        setup_btn.clicked.connect(self._open_channel_setup)
+        bar.addWidget(setup_btn)
 
         lab_btn = QPushButton("Processing Lab")
         lab_btn.setToolTip("Open the offline processing playground")
@@ -213,6 +219,19 @@ class SessionView(QWidget):
     def _on_channels_changed(self, active: List[bool]) -> None:
         self._active = active
 
+    def _open_channel_setup(self) -> None:
+        dialog = ChannelSetupDialog(self._manager, self)
+        if dialog.exec() != ChannelSetupDialog.DialogCode.Accepted:
+            return
+        names = dialog.names()
+        self._manager.set_channel_config(
+            names, dialog.types(), dialog.electrodes(), dialog.placements()
+        )
+        for widget in (self.time_series, self.psd, self.spectrogram, self.impedance,
+                       self.stats_panel, self.channel_panel):
+            if hasattr(widget, "set_channel_names"):
+                widget.set_channel_names(names)
+
     def _on_pause(self, paused: bool) -> None:
         if paused:
             self._manager.stop()
@@ -238,7 +257,10 @@ class SessionView(QWidget):
             "sampling_rate": self._manager.sampling_rate,
             "board_id": self._manager.board_id,
             "eeg_channels": self._manager.eeg_channels,
-            "channel_names": ["Ch1", "Ch2", "Ch3", "Ch4"][:n_eeg],
+            "channel_names": list(self._manager.channel_names[:n_eeg]),
+            "channel_types": list(self._manager.channel_types[:n_eeg]),
+            "electrodes": list(self._manager.electrodes[:n_eeg]),
+            "placements": list(self._manager.placements[:n_eeg]),
             "marker_channel": self._manager.marker_channel,
             "notch_freq": self._config.notch_freq,
         }

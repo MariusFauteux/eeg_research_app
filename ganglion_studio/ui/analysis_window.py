@@ -98,17 +98,17 @@ class AnalysisWindow(QMainWindow):
         self.source_combo.currentTextChanged.connect(self._rebuild)
         bar.addWidget(self.source_combo)
 
-        # Pair selectors for comparison (populated only if available).
-        self.pedot_combo = QComboBox()
-        self.agagcl_combo = QComboBox()
-        self.pedot_combo.currentIndexChanged.connect(self._rebuild_comparison_only)
-        self.agagcl_combo.currentIndexChanged.connect(self._rebuild_comparison_only)
-        self._pair_label = QLabel("Compare pair:")
+        # General A vs B channel selectors for the comparison tab.
+        self.chan_a_combo = QComboBox()
+        self.chan_b_combo = QComboBox()
+        self.chan_a_combo.currentIndexChanged.connect(self._rebuild_comparison_only)
+        self.chan_b_combo.currentIndexChanged.connect(self._rebuild_comparison_only)
+        self._pair_label = QLabel("Compare:")
         bar.addWidget(self._pair_label)
-        bar.addWidget(QLabel("PEDOT"))
-        bar.addWidget(self.pedot_combo)
-        bar.addWidget(QLabel("Ag/AgCl"))
-        bar.addWidget(self.agagcl_combo)
+        bar.addWidget(QLabel("A"))
+        bar.addWidget(self.chan_a_combo)
+        bar.addWidget(QLabel("vs B"))
+        bar.addWidget(self.chan_b_combo)
         bar.addStretch(1)
 
         save_all = QPushButton("Save all figures...")
@@ -119,16 +119,27 @@ class AnalysisWindow(QMainWindow):
 
     def _populate_pair_combos(self) -> None:
         eeg = A.eeg_metas(self._metas)
-        pedots = [m for m in eeg if m.is_pedot]
-        agagcls = [m for m in eeg if m.is_agagcl]
-        for combo, items in ((self.pedot_combo, pedots), (self.agagcl_combo, agagcls)):
+        for combo in (self.chan_a_combo, self.chan_b_combo):
             combo.blockSignals(True)
             combo.clear()
-            for m in items:
-                combo.addItem(m.name, m.index)
+            for m in eeg:
+                combo.addItem(f"{m.name} ({m.electrode})", m.index)
             combo.blockSignals(False)
-        show = bool(pedots and agagcls)
-        for w in (self._pair_label, self.pedot_combo, self.agagcl_combo):
+        # Defaults: A = first PEDOT, B = first Ag/AgCl, else first two channels.
+        pedots = [i for i, m in enumerate(eeg) if m.is_pedot]
+        agagcls = [i for i, m in enumerate(eeg) if m.is_agagcl]
+        self.chan_a_combo.blockSignals(True)
+        self.chan_b_combo.blockSignals(True)
+        if pedots:
+            self.chan_a_combo.setCurrentIndex(pedots[0])
+        if agagcls:
+            self.chan_b_combo.setCurrentIndex(agagcls[0])
+        elif self.chan_b_combo.count() > 1 and self.chan_b_combo.currentIndex() == self.chan_a_combo.currentIndex():
+            self.chan_b_combo.setCurrentIndex(1)
+        self.chan_a_combo.blockSignals(False)
+        self.chan_b_combo.blockSignals(False)
+        show = len(eeg) >= 2
+        for w in (self._pair_label, self.chan_a_combo, self.chan_b_combo):
             w.setVisible(show)
 
     # --------------------------------------------------------------- data
@@ -138,16 +149,18 @@ class AnalysisWindow(QMainWindow):
         return self._processed
 
     def _selected_pair(self) -> Optional[Tuple[int, int, str, str]]:
-        if self.pedot_combo.count() == 0 or self.agagcl_combo.count() == 0:
+        if self.chan_a_combo.count() == 0 or self.chan_b_combo.count() == 0:
             return None
-        pi = self.pedot_combo.currentData()
-        ai = self.agagcl_combo.currentData()
-        if pi is None or ai is None:
+        ai = self.chan_a_combo.currentData()
+        bi = self.chan_b_combo.currentData()
+        if ai is None or bi is None:
             return None
-        return pi, ai, self.pedot_combo.currentText(), self.agagcl_combo.currentText()
+        return ai, bi, self.chan_a_combo.currentText(), self.chan_b_combo.currentText()
 
     # ------------------------------------------------------------- build
     def _rebuild(self, *_args) -> None:
+        if not hasattr(self, "tabs"):
+            return
         current = self.tabs.currentIndex()
         self.tabs.clear()
         self._panels = []
@@ -164,8 +177,13 @@ class AnalysisWindow(QMainWindow):
             ("char_noise", A.fig_char_noise(eeg, sr, metas)),
             ("char_psd_by_material", A.fig_char_psd_by_material(eeg, sr, metas)),
         ])
+        if len(A.eeg_metas(metas)) >= 2:
+            self._add_tab("Compare channels", self._compare_figures(eeg, sr))
         if A.comparison_available(metas):
-            self._add_tab("PEDOT vs Ag/AgCl", self._comparison_figures(eeg, sr, metas))
+            self._add_tab("Material groups", [
+                ("group_psd", A.fig_cmp_psd(eeg, sr, metas)),
+                ("group_band_power", A.fig_cmp_bandpower(eeg, sr, metas)),
+            ])
 
         if 0 <= current < self.tabs.count():
             self.tabs.setCurrentIndex(current)
@@ -174,19 +192,23 @@ class AnalysisWindow(QMainWindow):
         # Rebuild everything (cheap) so paired figures reflect the new selection.
         self._rebuild()
 
-    def _comparison_figures(self, eeg, sr, metas) -> List[Tuple[str, Figure]]:
-        figs = [
-            ("cmp_psd", A.fig_cmp_psd(eeg, sr, metas)),
-            ("cmp_band_power", A.fig_cmp_bandpower(eeg, sr, metas)),
-        ]
+    def _compare_figures(self, eeg, sr) -> List[Tuple[str, Figure]]:
         pair = self._selected_pair()
-        if pair:
-            pi, ai, plabel, alabel = pair
-            ag = A.pair_agreement(eeg[pi], eeg[ai], sr)
-            figs.append(("cmp_coherence", A.fig_cmp_coherence(eeg[pi], eeg[ai], sr, ag, plabel, alabel)))
-            figs.append(("cmp_correlation", A.fig_cmp_correlation(eeg[pi], eeg[ai], ag, plabel, alabel)))
-            figs.append(("cmp_bland_altman", A.fig_cmp_bland_altman(eeg[pi], eeg[ai], ag, plabel, alabel)))
-        return figs
+        if not pair:
+            return []
+        ai, bi, alabel, blabel = pair
+        ag = A.pair_agreement(eeg[ai], eeg[bi], sr)
+        return [
+            ("cmp_stats_table", A.fig_pair_stats_table(eeg[ai], eeg[bi], sr, ag, alabel, blabel)),
+            ("cmp_timeseries", A.fig_pair_timeseries(eeg[ai], eeg[bi], sr, alabel, blabel)),
+            ("cmp_psd_overlay", A.fig_pair_psd(eeg[ai], eeg[bi], sr, alabel, blabel)),
+            ("cmp_coherence", A.fig_cmp_coherence(eeg[ai], eeg[bi], sr, ag, alabel, blabel)),
+            ("cmp_correlation", A.fig_cmp_correlation(eeg[ai], eeg[bi], ag, alabel, blabel)),
+            ("cmp_bland_altman", A.fig_cmp_bland_altman(eeg[ai], eeg[bi], ag, alabel, blabel)),
+            ("cmp_cross_correlation", A.fig_pair_cross_correlation(eeg[ai], eeg[bi], sr, alabel, blabel)),
+            ("cmp_histogram", A.fig_pair_histogram(eeg[ai], eeg[bi], alabel, blabel)),
+            ("cmp_band_power_ratio", A.fig_pair_bandpower_ratio(eeg[ai], eeg[bi], sr, alabel, blabel)),
+        ]
 
     def _add_tab(self, title: str, figures: List[Tuple[str, Figure]]) -> None:
         container = QWidget()

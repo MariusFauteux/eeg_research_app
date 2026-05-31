@@ -61,6 +61,10 @@ class BoardManager:
     timestamp_channel: int = field(default=0, init=False)
 
     channel_active: List[bool] = field(default_factory=list, init=False)
+    channel_names: List[str] = field(default_factory=list, init=False)
+    channel_types: List[str] = field(default_factory=list, init=False)
+    electrodes: List[str] = field(default_factory=list, init=False)
+    placements: List[str] = field(default_factory=list, init=False)
     streaming: bool = field(default=False, init=False)
     impedance_mode: bool = field(default=False, init=False)
     accel_enabled: bool = field(default=True, init=False)
@@ -112,7 +116,20 @@ class BoardManager:
         self.resistance_channels = list(descr.get("resistance_channels", []))
         self.marker_channel = int(descr.get("marker_channel", 0))
         self.timestamp_channel = int(descr.get("timestamp_channel", 0))
-        self.channel_active = [True] * len(self.eeg_channels)
+        n = len(self.eeg_channels)
+        self.channel_active = [True] * n
+        self.channel_names = [f"Ch{i + 1}" for i in range(n)]
+        self.channel_types = ["EEG"] * n
+        self.electrodes = [cfg.ELECTRODES[0]] * n
+        self.placements = ["None"] * n
+
+    def set_channel_config(self, names, types, electrodes, placements) -> None:
+        """Apply per-channel display names + type/electrode/placement metadata."""
+        n = len(self.eeg_channels)
+        self.channel_names = list(names)[:n]
+        self.channel_types = list(types)[:n]
+        self.electrodes = list(electrodes)[:n]
+        self.placements = list(placements)[:n]
 
     def prepare(self) -> None:
         """Create the session and prepare the board. May block while BLE connects."""

@@ -90,6 +90,8 @@ class ProcessingConfig:
     wavelet: WaveletStepConfig = field(default_factory=WaveletStepConfig)
     asr: AsrStepConfig = field(default_factory=AsrStepConfig)
     aas: AasStepConfig = field(default_factory=AasStepConfig)
+    # Indices of active channels; CAR is computed over these only. Empty -> all.
+    active_channels: Optional[List[int]] = None
 
 
 # --------------------------------------------------------------------------- #
@@ -246,8 +248,15 @@ def apply_pipeline(eeg: np.ndarray, sampling_rate: int, ch_names: List[str],
     data = np.ascontiguousarray(eeg, dtype=np.float64).copy()
 
     if config.reref_car and data.shape[0] > 1:
-        data = data - np.mean(data, axis=0, keepdims=True)
-        messages.append("Re-reference: common average (CAR)")
+        active = config.active_channels
+        if active:
+            rows = [r for r in active if 0 <= r < data.shape[0]]
+        else:
+            rows = list(range(data.shape[0]))
+        if rows:
+            ref = np.mean(data[rows, :], axis=0, keepdims=True)
+            data = data - ref
+            messages.append(f"Re-reference: common average (CAR) over {len(rows)} channels")
 
     if config.detrend in ("constant", "linear"):
         op = DetrendOperations.CONSTANT.value if config.detrend == "constant" else DetrendOperations.LINEAR.value

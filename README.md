@@ -17,6 +17,13 @@ all with full control over board, channels, filters and markers.
   (FW3 default / FW2 legacy / auto) and mains-notch region (50/60 Hz).
 - **Demo mode** (BrainFlow synthetic board) to explore the whole app with no hardware.
 
+### Channel setup (recording view)
+- A **Channel setup** dialog lets you set each channel's signal **type** (EEG/EMG/ECG/MISC),
+  **electrode** (Ag/AgCl wet/dry, PEDOT:PSS, PEDOT, Other) and **10-20 placement**.
+  The placement becomes the channel's display name across all plots, the config is
+  written into each recording's `_meta.json`, and montages can be saved/loaded as
+  reusable JSON presets.
+
 ### Live signal statistics
 - A left-column panel updates continuously with per-channel **RMS, peak-to-peak,
   std, dominant frequency, mains-noise fraction and a contact-quality flag**
@@ -35,8 +42,10 @@ all with full control over board, channels, filters and markers.
   run on a worker thread so the UI stays responsive. Steps whose optional backend
   is missing are disabled with a tooltip.
 - **Channel typing**: set each channel's type (EEG/ECG/EMG/MISC) and electrode
-  material (Ag/AgCl wet/dry, PEDOT, Other). An ECG-typed channel auto-fills the
-  AAS reference.
+  material (Ag/AgCl wet/dry, PEDOT:PSS, PEDOT, Other), pre-filled from the loaded
+  recording's metadata. An ECG-typed channel auto-fills the AAS reference. Each
+  channel also has an **On/Off** toggle that excludes it from re-referencing,
+  the plots, and the analysis report.
 
 ### Analysis & electrode-characterization report
 - **Generate analysis plots** (Processing Lab) opens a tabbed, descriptive report:
@@ -44,10 +53,13 @@ all with full control over board, channels, filters and markers.
     per-channel quality/noise table.
   - *Electrode characterization*: RMS noise and 50/60 Hz line-noise bars and a PSD
     overlay, coloured by electrode material.
-  - *PEDOT vs Ag/AgCl* (shown when both are present): group-mean PSD +/- std,
-    band-power comparison with t-tests, and - for a selectable co-located pair -
-    magnitude-squared coherence, correlation scatter (r, RMSE), and a Bland-Altman
-    agreement plot.
+  - *Compare channels*: pick any two channels (A vs B) and compare them with a
+    statistics table (Pearson + Spearman r, RMSE/NRMSE, per-band coherence,
+    Bland-Altman bias/LoA, per-channel RMS/line-noise/SNR), overlaid time series,
+    PSD overlay, coherence, correlation scatter, cross-correlation, amplitude
+    histograms, and band-power comparison.
+  - *Material groups* (shown when both PEDOT and Ag/AgCl are present): group-mean
+    PSD +/- std and band-power comparison with t-tests.
 - Switch the report source between processed and original signal. Each figure has
   its own Save (PNG/SVG/PDF) plus a Save-all option.
 

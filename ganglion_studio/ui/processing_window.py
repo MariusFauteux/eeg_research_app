@@ -355,7 +355,7 @@ class ProcessingWindow(QWidget):
             processed=np.ascontiguousarray(processed),
             original=np.ascontiguousarray(self._rec.eeg),
             sampling_rate=self._rec.sampling_rate,
-            metas=self.channel_metas(),
+            metas=self.channel_metas(enabled_only=True),
             title=title,
         )
         window.show()
@@ -371,42 +371,67 @@ class ProcessingWindow(QWidget):
                 w.deleteLater()
         self._type_combos = []
         self._elec_combos = []
+        self._enable_checks = []
 
         header = QHBoxLayout()
-        for text in ("Channel", "Type", "Electrode"):
+        for text in ("On", "Channel", "Type", "Electrode"):
             lab = QLabel(text)
             lab.setStyleSheet("color:#9aa0aa; font-size:10px; font-weight:600;")
-            header.addWidget(lab, 1)
+            header.addWidget(lab)
         hw = QWidget()
         hw.setLayout(header)
         self.channels_layout.addWidget(hw)
 
+        # pre-fill from loaded metadata if present
+        load_types = getattr(rec, "channel_types", []) or []
+        load_elecs = getattr(rec, "electrodes", []) or []
         for i, name in enumerate(rec.channel_names):
             row = QHBoxLayout()
+            chk = QCheckBox()
+            chk.setChecked(True)
+            chk.setToolTip("Include this channel in filtering, plots and analysis")
+            chk.toggled.connect(self._on_channel_active_changed)
+            row.addWidget(chk)
             row.addWidget(QLabel(name), 1)
             tcombo = QComboBox()
             tcombo.addItems(CHANNEL_TYPES)
+            if i < len(load_types) and load_types[i] in CHANNEL_TYPES:
+                tcombo.setCurrentText(load_types[i])
             tcombo.currentTextChanged.connect(self._on_channel_meta_changed)
             row.addWidget(tcombo, 1)
             ecombo = QComboBox()
             ecombo.addItems(ELECTRODES)
+            if i < len(load_elecs) and load_elecs[i] in ELECTRODES:
+                ecombo.setCurrentText(load_elecs[i])
             ecombo.currentTextChanged.connect(self._on_channel_meta_changed)
             row.addWidget(ecombo, 1)
+            self._enable_checks.append(chk)
             self._type_combos.append(tcombo)
             self._elec_combos.append(ecombo)
             rw = QWidget()
             rw.setLayout(row)
             self.channels_layout.addWidget(rw)
 
-    def channel_metas(self) -> List[ChannelMeta]:
+    def _channel_enabled(self, i: int) -> bool:
+        return self._enable_checks[i].isChecked() if i < len(self._enable_checks) else True
+
+    def channel_metas(self, enabled_only: bool = False) -> List[ChannelMeta]:
         if not self._rec:
             return []
         metas = []
         for i, name in enumerate(self._rec.channel_names):
             ctype = self._type_combos[i].currentText() if i < len(self._type_combos) else "EEG"
             elec = self._elec_combos[i].currentText() if i < len(self._elec_combos) else ELECTRODES[0]
-            metas.append(ChannelMeta(index=i, name=name, ch_type=ctype, electrode=elec))
+            enabled = self._channel_enabled(i)
+            if enabled_only and not enabled:
+                continue
+            metas.append(ChannelMeta(index=i, name=name, ch_type=ctype,
+                                     electrode=elec, enabled=enabled))
         return metas
+
+    def _on_channel_active_changed(self, *_args) -> None:
+        self._redraw_all()
+        self._schedule()
 
     def _on_channel_meta_changed(self, *_args) -> None:
         # If a channel is marked ECG, default the AAS reference to it.
@@ -457,6 +482,9 @@ class ProcessingWindow(QWidget):
         c.aas.pre_ms = self.aas_pre.value()
         c.aas.post_ms = self.aas_post.value()
         c.aas.aggregation = self.aas_agg.currentText()
+        if self._rec is not None:
+            c.active_channels = [i for i in range(self._rec.n_channels)
+                                 if self._channel_enabled(i)]
         return c
 
     def _recompute(self) -> None:
@@ -509,6 +537,9 @@ class ProcessingWindow(QWidget):
         sr = self._rec.sampling_rate
         if self.view_combo.currentText() == "PSD":
             for i in range(len(curves)):
+                if not self._channel_enabled(i):
+                    curves[i].clear()
+                    continue
                 freqs, amps = compute_psd(np.ascontiguousarray(data[i]), sr)
                 if freqs.size:
                     m = freqs <= 70.0
@@ -519,22 +550,27 @@ class ProcessingWindow(QWidget):
             plot.setLabel("left", "PSD", units="uV^2/Hz")
             plot.enableAutoRange()
             return
-        # time view: stacked offsets
+        # time view: stacked offsets (active channels only)
         t = np.arange(data.shape[1]) / sr
         amp = self.amp_spin.value()
         spacing = amp * 2.2
         ticks = []
-        n = len(curves)
-        for i in range(n):
-            offset = (n - 1 - i) * spacing
+        active = [i for i in range(len(curves)) if self._channel_enabled(i)]
+        n = len(active)
+        for slot, i in enumerate(active):
+            offset = (n - 1 - slot) * spacing
             curves[i].setData(t, data[i] + offset)
             curves[i].setDownsampling(auto=True, method="peak")
             curves[i].setClipToView(True)
             name = self._rec.channel_names[i] if i < len(self._rec.channel_names) else f"Ch{i+1}"
             ticks.append((offset, name))
+        for i in range(len(curves)):
+            if i not in active:
+                curves[i].clear()
         plot.getAxis("left").setTicks([ticks])
         plot.setLabel("left", "")
-        plot.setYRange(-spacing, n * spacing, padding=0)
+        if n:
+            plot.setYRange(-spacing, n * spacing, padding=0)
 
     def _configure_scrollbar(self) -> None:
         if self._rec is None:

@@ -106,6 +106,21 @@ view.stats_panel.update_stats(view._settings, view._active)
 print("stats general:", view.stats_panel.general.text())
 assert view.stats_panel.table.item(0, 1).text() not in ("", "-"), "stats not populated"
 
+# Channel setup: set names/types/electrodes/placements and relabel widgets.
+mgr.set_channel_config(
+    ["Fp1", "Fp2", "C3", "C4"],
+    ["EEG", "EEG", "EEG", "ECG"],
+    ["PEDOT:PSS", "Ag/AgCl (wet)", "PEDOT:PSS", "Other"],
+    ["Fp1", "Fp2", "C3", "None"],
+)
+for _w in (view.time_series, view.psd, view.spectrogram, view.impedance,
+           view.stats_panel, view.channel_panel):
+    _w.set_channel_names(mgr.channel_names)
+assert view.stats_panel.table.item(0, 0).text() == "Fp1", "stats relabel failed"
+assert view.channel_panel._checks[0].text() == "Fp1", "channel panel relabel failed"
+assert view.spectrogram.ch_combo.itemText(0) == "Fp1", "spectrogram relabel failed"
+print("channel relabel ok:", mgr.channel_names)
+
 # Recording review + export.
 import tempfile
 import numpy as np
@@ -167,7 +182,10 @@ sr2 = mgr.sampling_rate
 rmeta = {
     "sampling_rate": sr2,
     "eeg_channels": mgr.eeg_channels,
-    "channel_names": ["Ch1", "Ch2", "Ch3", "Ch4"][: len(mgr.eeg_channels)],
+    "channel_names": list(mgr.channel_names),
+    "channel_types": list(mgr.channel_types),
+    "electrodes": list(mgr.electrodes),
+    "placements": list(mgr.placements),
     "marker_channel": mgr.marker_channel,
 }
 rec = SessionRecorder(SC(name="proc-lab-test", demo=True))
@@ -177,6 +195,11 @@ csv_path = [w for w in written if w.endswith("_raw.csv")][0]
 loaded = load_recording(csv_path)
 print("loaded:", loaded.n_channels, "ch", loaded.sampling_rate, "Hz", loaded.n_samples, "samp")
 assert loaded.n_channels == len(mgr.eeg_channels) and loaded.n_samples > 0
+# Channel config persisted into meta and read back by the loader.
+assert loaded.channel_names[0] == "Fp1", "channel name not persisted"
+assert loaded.electrodes and loaded.electrodes[0] == "PEDOT:PSS", "electrode not persisted"
+assert loaded.channel_types and loaded.channel_types[3] == "ECG", "type not persisted"
+print("channel config persisted:", loaded.channel_types, loaded.electrodes)
 
 # AAS: synthesize an ECG-like reference with known R-peaks + artifact, verify reduction.
 n2 = sr2 * 20
@@ -209,12 +232,22 @@ print("pipeline steps:", " | ".join(msgs2))
 # Processing window: load a file and run one synchronous recompute.
 win = ProcessingWindow()
 win._load(csv_path)
+# Loaded metadata should pre-fill the channel type/electrode combos.
+assert win._elec_combos[0].currentText() == "PEDOT:PSS", "lab did not pre-fill electrode"
 win.wavelet_box.setChecked(True)
 win._recompute()
 win._worker.wait(20000)
 app.processEvents()
 assert win._processed is not None and win._processed.shape == loaded.eeg.shape
 print("processing window recompute ok")
+
+# Deactivate a channel: excluded from CAR active set and from analysis metas.
+win._enable_checks[1].setChecked(False)
+dcfg = win._build_config()
+assert 1 not in (dcfg.active_channels or []), "deactivated channel still in CAR set"
+enabled_metas = win.channel_metas(enabled_only=True)
+assert all(m.index != 1 for m in enabled_metas), "deactivated channel still in analysis metas"
+print("deactivation ok; active channels:", dcfg.active_channels)
 
 # --- Analysis report: channel typing, figures, comparison stats, save ---
 import matplotlib
@@ -230,26 +263,32 @@ aeeg[4] = 0.0
 for p in range(sr2 // 2, na, sr2):
     aeeg[4, max(0, p - 3):p + 3] += 300 * np.hanning(6)
 ametas = [
-    A.ChannelMeta(0, "P1", "EEG", "PEDOT"),
-    A.ChannelMeta(1, "P2", "EEG", "PEDOT"),
+    A.ChannelMeta(0, "P1", "EEG", "PEDOT:PSS"),
+    A.ChannelMeta(1, "P2", "EEG", "PEDOT:PSS"),
     A.ChannelMeta(2, "A1", "EEG", "Ag/AgCl (wet)"),
     A.ChannelMeta(3, "A2", "EEG", "Ag/AgCl (dry)"),
     A.ChannelMeta(4, "ECG", "ECG", "Other"),
 ]
 assert A.comparison_available(ametas)
 agm = A.pair_agreement(aeeg[0], aeeg[2], sr2)
-assert all(np.isfinite([agm["r"], agm["rmse"], agm["mean_coherence_1_30"], agm["ba_bias"]]))
+for k in ("r", "spearman", "rmse", "nrmse", "mean_coherence_1_30", "ba_bias"):
+    assert np.isfinite(agm[k]), f"stat {k} not finite"
+assert set(agm["band_coherence"].keys()) == {"Delta", "Theta", "Alpha", "Beta", "Gamma"}
 gstats = A.group_band_stats(aeeg, sr2, ametas)
 assert "PEDOT" in gstats["groups"] and "Ag/AgCl" in gstats["groups"]
-print(f"analysis: r={agm['r']:.2f} coh={agm['mean_coherence_1_30']:.2f} "
+print(f"analysis: r={agm['r']:.2f} spearman={agm['spearman']:.2f} coh={agm['mean_coherence_1_30']:.2f} "
       f"groups={ {k: v['n'] for k, v in gstats['groups'].items()} } pvals={len(gstats.get('pvals', []))}")
 
 awin = AnalysisWindow(aeeg, aeeg.copy(), sr2, ametas, title="analysis-test")
 tab_titles = [awin.tabs.tabText(i) for i in range(awin.tabs.count())]
-assert "PEDOT vs Ag/AgCl" in tab_titles, tab_titles
+assert "Compare channels" in tab_titles, tab_titles
+assert "Material groups" in tab_titles, tab_titles
 n_panels = len(awin._panels)
 print("analysis tabs:", tab_titles, "| panels:", n_panels)
 assert n_panels >= 8
+# Switch the A/B comparison pair and confirm a rebuild.
+awin.chan_b_combo.setCurrentIndex(1)
+app.processEvents()
 # Save one figure and switch source without error.
 atmp = tempfile.mkdtemp()
 awin._panels[0][1].figure().savefig(os.path.join(atmp, "fig0.png"), dpi=90)

@@ -30,6 +30,8 @@ class LoadedRecording:
     channel_names: List[str]
     markers: List[ReviewMarker] = field(default_factory=list)
     source_path: str = ""
+    channel_types: List[str] = field(default_factory=list)
+    electrodes: List[str] = field(default_factory=list)
 
     @property
     def n_channels(self) -> int:
@@ -80,6 +82,8 @@ def _load_csv(path: str) -> LoadedRecording:
         names = list(meta.get("channel_names",
                               [f"Ch{i + 1}" for i in range(len(eeg_rows))]))
         marker_channel = int(meta.get("marker_channel", 0))
+        ch_types = list(meta.get("channel_types", []))
+        electrodes = list(meta.get("electrodes", []))
     else:
         # No metadata: assume a Ganglion layout.
         bid = BoardIds.GANGLION_NATIVE_BOARD.value
@@ -88,6 +92,8 @@ def _load_csv(path: str) -> LoadedRecording:
         sr = int(descr["sampling_rate"])
         names = [f"Ch{i + 1}" for i in range(len(eeg_rows))]
         marker_channel = int(descr.get("marker_channel", 0))
+        ch_types = []
+        electrodes = []
 
     eeg_rows = [r for r in eeg_rows if r < data.shape[0]]
     eeg = np.ascontiguousarray(data[eeg_rows, :], dtype=np.float64)
@@ -100,7 +106,9 @@ def _load_csv(path: str) -> LoadedRecording:
             code = int(row[idx])
             markers.append(ReviewMarker(int(idx), code, f"code {code}"))
 
-    return LoadedRecording(eeg, sr, names, markers, path)
+    return LoadedRecording(eeg, sr, names, markers, path,
+                           channel_types=ch_types[: len(eeg_rows)],
+                           electrodes=electrodes[: len(eeg_rows)])
 
 
 def _load_mne(path: str) -> LoadedRecording:

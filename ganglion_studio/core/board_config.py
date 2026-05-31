@@ -27,6 +27,20 @@ STREAM_STOP = "s"
 # Default electrode labels for the 4 Ganglion channels (10-20 friendly).
 DEFAULT_CHANNEL_NAMES = ["Ch1", "Ch2", "Ch3", "Ch4"]
 
+# Channel signal types and electrode materials used for setup/analysis.
+CHANNEL_TYPES = ["EEG", "EMG", "ECG", "MISC"]
+ELECTRODES = ["Ag/AgCl (wet)", "Ag/AgCl (dry)", "PEDOT:PSS", "PEDOT", "Other"]
+
+# Standard 10-20 electrode placements (plus references / unset).
+TEN_TWENTY = [
+    "None",
+    "Fp1", "Fp2", "F7", "F3", "Fz", "F4", "F8",
+    "T7", "C3", "Cz", "C4", "T8",
+    "P7", "P3", "Pz", "P4", "P8",
+    "O1", "O2",
+    "A1", "A2", "M1", "M2", "Custom",
+]
+
 # A small palette used consistently across the time series / PSD / panels so a
 # channel keeps the same colour everywhere.
 CHANNEL_COLORS = [

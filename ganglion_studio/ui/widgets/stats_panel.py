@@ -50,7 +50,7 @@ class StatsPanel(QGroupBox):
             "Line = mains-noise fraction, Q = contact quality"
         )
         for i in range(self._n):
-            name = cfg.DEFAULT_CHANNEL_NAMES[i] if i < len(cfg.DEFAULT_CHANNEL_NAMES) else f"Ch{i+1}"
+            name = manager.channel_names[i] if i < len(manager.channel_names) else f"Ch{i+1}"
             item = QTableWidgetItem(name)
             item.setForeground(QColor(cfg.CHANNEL_COLORS[i % len(cfg.CHANNEL_COLORS)]))
             self.table.setItem(i, 0, item)
@@ -63,6 +63,10 @@ class StatsPanel(QGroupBox):
         self.general.setWordWrap(True)
         self.general.setStyleSheet("color:#9aa0aa; font-size:11px;")
         root.addWidget(self.general)
+
+    def set_channel_names(self, names: List[str]) -> None:
+        for i in range(min(self.table.rowCount(), len(names))):
+            self.table.item(i, 0).setText(names[i])
 
     def update_stats(self, settings: FilterSettings, active: List[bool]) -> None:
         data = self._manager.recent_eeg(self._window)
