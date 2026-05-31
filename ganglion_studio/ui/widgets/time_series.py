@@ -80,7 +80,9 @@ class TimeSeriesWidget(QWidget):
         sr = self._manager.sampling_rate
         amp = self.amp_spin.value()
         n = data.shape[1]
-        t = np.arange(n) / sr if n else np.array([])
+        # Newest sample sits at t=0 (right edge); older samples are negative
+        # seconds in the past, scrolling left — matches the OpenBCI GUI.
+        t = (np.arange(n) - (n - 1)) / sr if n else np.array([])
 
         for i in range(self._n):
             visible = active[i] if i < len(active) else True
@@ -94,8 +96,9 @@ class TimeSeriesWidget(QWidget):
                 self._plots[i].enableAutoRange(axis="y")
             else:
                 self._plots[i].setYRange(-amp, amp, padding=0)
-            if n:
-                self._plots[i].setXRange(t[0], t[-1], padding=0)
+            # Pin the right edge at 0 ("now") with a fixed window width, so the
+            # axis stays stable while the buffer fills.
+            self._plots[i].setXRange(-seconds, 0, padding=0)
 
         self._draw_markers(seconds, t)
 
@@ -110,7 +113,8 @@ class TimeSeriesWidget(QWidget):
         sr = self._manager.sampling_rate
         n = t.size
         for mi in idx:
-            x = mi / sr
+            # Match the time vector: newest sample at 0, older samples negative.
+            x = (mi - (n - 1)) / sr
             for p in self._plots:
                 if not p.isVisible():
                     continue
