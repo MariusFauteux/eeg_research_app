@@ -37,6 +37,15 @@ EEG_BANDS = [
 
 _MIN_FILTER_SAMPLES = 32
 
+# OpenBCI Ganglion full-scale input range (MCP3912 ADC, Vref 1.2 V, gain 51):
+#   scale      = 1.2 / ((2**23 - 1) * 1.5 * 51) * 1e6  ~= 1.87e-3 uV/count
+#   full-scale = scale * (2**23 - 1) = 1.2e6 / (1.5 * 51)  ~= 15686 uV
+# (Note: +/- 187500 uV is the *Cyton's* range -- 4.5 V / gain 24 -- not the
+# Ganglion. BrainFlow already returns Ganglion data in uV.)
+GANGLION_FULLSCALE_UV = 15686.0
+# Fraction of full-scale above which a channel is treated as railed/clipped.
+_RAIL_FRACTION = 0.95
+
 
 @dataclass
 class FilterSettings:
@@ -159,6 +168,14 @@ def compute_band_powers(eeg: np.ndarray, sampling_rate: int
         return names, np.zeros(len(EEG_BANDS))
 
 
+def is_railed(channel: np.ndarray) -> bool:
+    """True if the signal pins near the Ganglion ADC full-scale (clipping)."""
+    data = _as_float(channel)
+    if data.size == 0:
+        return False
+    return bool(np.max(np.abs(data)) > _RAIL_FRACTION * GANGLION_FULLSCALE_UV)
+
+
 def signal_quality(channel: np.ndarray, sampling_rate: int) -> dict:
     """Lightweight per-channel quality metrics for electrode characterization."""
     data = _as_float(channel)
@@ -166,8 +183,7 @@ def signal_quality(channel: np.ndarray, sampling_rate: int) -> dict:
         return {"rms": 0.0, "ptp": 0.0, "railed": False, "line_ratio": 0.0}
     rms = float(np.sqrt(np.mean(np.square(data - np.mean(data)))))
     ptp = float(np.ptp(data))
-    # Railed if amplitude pins near the Ganglion full-scale (~ +/- 187500 uV).
-    railed = bool(np.max(np.abs(data)) > 180000.0)
+    railed = is_railed(data)
     freqs, mag = compute_fft(channel, sampling_rate)
     line_ratio = 0.0
     if freqs.size:

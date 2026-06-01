@@ -11,6 +11,12 @@ import time
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import glob
+# Snapshot any recordings that already exist so teardown only deletes what THIS
+# run creates. The cleanup must NEVER remove the user's existing recordings.
+_recordings_existed = os.path.isdir("recordings")
+_preexisting_recordings = set(glob.glob("recordings/*"))
+
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
 # Avoid modal dialogs blocking the headless run.
@@ -298,7 +304,13 @@ app.processEvents()
 print("analysis window ok; figure saved")
 
 import shutil
-shutil.rmtree("recordings", ignore_errors=True)
+# Remove only the recording folders this run created; leave any pre-existing
+# recordings untouched. (Previously this wiped the whole recordings/ directory.)
+for _p in glob.glob("recordings/*"):
+    if _p not in _preexisting_recordings:
+        shutil.rmtree(_p, ignore_errors=True) if os.path.isdir(_p) else os.remove(_p)
+if not _recordings_existed and os.path.isdir("recordings") and not os.listdir("recordings"):
+    os.rmdir("recordings")
 
 view.shutdown()
 mgr.release()

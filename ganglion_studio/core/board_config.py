@@ -16,9 +16,11 @@ CHANNEL_OFF = {0: "1", 1: "2", 2: "3", 3: "4"}
 IMPEDANCE_START = "z"
 IMPEDANCE_STOP = "Z"
 
-# Accelerometer (18-bit delta compression of channel data while enabled).
-ACCEL_START = "n"
-ACCEL_STOP = "N"
+# Disable the accelerometer. With accel OFF the Ganglion streams EEG as 19-bit
+# deltas; with it ON the EEG drops to 18-bit to make room for 3-axis accel data.
+# This app keeps the accelerometer off to maximize EEG resolution, so only the
+# disable command is ever sent (once, on stream start).
+ACCEL_DISABLE = "N"
 
 # Streaming.
 STREAM_START = "b"
@@ -28,7 +30,9 @@ STREAM_STOP = "s"
 DEFAULT_CHANNEL_NAMES = ["Ch1", "Ch2", "Ch3", "Ch4"]
 
 # Channel signal types and electrode materials used for setup/analysis.
-CHANNEL_TYPES = ["EEG", "EMG", "ECG", "MISC"]
+# Single source of truth: core.analysis re-exports these so the live Channel
+# Setup dialog and the Processing Lab always offer identical options.
+CHANNEL_TYPES = ["EEG", "ECG", "EMG", "MISC"]
 ELECTRODES = ["Ag/AgCl (wet)", "Ag/AgCl (dry)", "PEDOT:PSS", "PEDOT", "Other"]
 
 # Standard 10-20 electrode placements (plus references / unset).

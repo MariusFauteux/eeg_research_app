@@ -55,7 +55,6 @@ class BoardManager:
     sampling_rate: int = field(default=200, init=False)
     num_rows: int = field(default=0, init=False)
     eeg_channels: List[int] = field(default_factory=list, init=False)
-    accel_channels: List[int] = field(default_factory=list, init=False)
     resistance_channels: List[int] = field(default_factory=list, init=False)
     marker_channel: int = field(default=0, init=False)
     timestamp_channel: int = field(default=0, init=False)
@@ -67,11 +66,13 @@ class BoardManager:
     placements: List[str] = field(default_factory=list, init=False)
     streaming: bool = field(default=False, init=False)
     impedance_mode: bool = field(default=False, init=False)
-    accel_enabled: bool = field(default=True, init=False)
 
     _ring: Optional[np.ndarray] = field(default=None, init=False)
     _filled: int = field(default=0, init=False)
     _buffer_len: int = field(default=0, init=False)
+    # Circular-buffer write cursor: index of the next column to write. The most
+    # recent sample lives at (_write - 1) % _buffer_len.
+    _write: int = field(default=0, init=False)
 
     recording: bool = field(default=False, init=False)
     _record_chunks: List[np.ndarray] = field(default_factory=list, init=False)
@@ -112,7 +113,6 @@ class BoardManager:
         self.sampling_rate = int(descr["sampling_rate"])
         self.num_rows = int(descr["num_rows"])
         self.eeg_channels = list(descr.get("eeg_channels", []))[:GANGLION_CHANNELS]
-        self.accel_channels = list(descr.get("accel_channels", []))
         self.resistance_channels = list(descr.get("resistance_channels", []))
         self.marker_channel = int(descr.get("marker_channel", 0))
         self.timestamp_channel = int(descr.get("timestamp_channel", 0))
@@ -143,6 +143,7 @@ class BoardManager:
         self._buffer_len = max(1, int(self.buffer_seconds * self.sampling_rate))
         self._ring = np.zeros((self.num_rows, self._buffer_len), dtype=np.float64)
         self._filled = 0
+        self._write = 0
         self._demo_imp = np.random.uniform(3.0, 25.0, size=len(self.eeg_channels))
         logger.info("Board prepared: id=%s sr=%s", self.board_id, self.sampling_rate)
 
@@ -151,9 +152,9 @@ class BoardManager:
             raise RuntimeError("Board not prepared")
         self.board.start_stream(450000)
         self.streaming = True
-        # Ganglion ships with accel on by delta-compression; make explicit.
-        if self.accel_enabled:
-            self._safe_config(cfg.ACCEL_START)
+        # Disable the accelerometer so the Ganglion streams 19-bit EEG deltas
+        # (with accel on it drops to 18-bit). We trade motion data for resolution.
+        self._safe_config(cfg.ACCEL_DISABLE)
 
     def stop(self) -> None:
         if self.board is not None and self.streaming:
@@ -225,15 +226,28 @@ class BoardManager:
         return n
 
     def _append_ring(self, data: np.ndarray) -> None:
+        """Append new columns to the circular ring buffer (O(n), no shifting)."""
         assert self._ring is not None
+        length = self._buffer_len
+        rows = min(data.shape[0], self._ring.shape[0])
         n = data.shape[1]
-        if n >= self._buffer_len:
-            self._ring[:, :] = data[:, -self._buffer_len:]
-            self._filled = self._buffer_len
-        else:
-            self._ring[:, :-n] = self._ring[:, n:]
-            self._ring[:, -n:] = data[: self._ring.shape[0], :]
-            self._filled = min(self._buffer_len, self._filled + n)
+        if n <= 0:
+            return
+        if n >= length:
+            # New chunk alone overfills the buffer: keep only its last `length`.
+            self._ring[:rows, :] = data[:rows, -length:]
+            self._write = 0
+            self._filled = length
+            return
+        end = self._write + n
+        if end <= length:
+            self._ring[:rows, self._write:end] = data[:rows, :]
+        else:  # chunk wraps past the buffer end
+            first = length - self._write
+            self._ring[:rows, self._write:] = data[:rows, :first]
+            self._ring[:rows, : n - first] = data[:rows, first:]
+        self._write = end % length
+        self._filled = min(length, self._filled + n)
 
     def _inject_demo_resistance(self, data: np.ndarray) -> np.ndarray:
         """Synthesize plausible impedance values for demo mode."""
@@ -254,8 +268,16 @@ class BoardManager:
         with self._lock:
             if self._ring is None or self._filled == 0:
                 return np.zeros((self.num_rows, 0))
-            n = min(self._filled, max(1, int(seconds * self.sampling_rate)))
-            return self._ring[:, -n:].copy()
+            length = self._buffer_len
+            count = min(self._filled, max(1, int(seconds * self.sampling_rate)))
+            end = self._write  # one past the most recent sample
+            start = (end - count) % length
+            if start < end:
+                return self._ring[:, start:end].copy()
+            # Window wraps the buffer end: stitch tail + head in time order.
+            return np.concatenate(
+                (self._ring[:, start:], self._ring[:, :end]), axis=1
+            )
 
     def recent_eeg(self, seconds: float) -> np.ndarray:
         data = self.recent(seconds)
@@ -305,10 +327,6 @@ class BoardManager:
         self.channel_active[index] = active
         cmd = cfg.CHANNEL_ON[index] if active else cfg.CHANNEL_OFF[index]
         self._safe_config(cmd)
-
-    def set_accel(self, enabled: bool) -> None:
-        self.accel_enabled = enabled
-        self._safe_config(cfg.ACCEL_START if enabled else cfg.ACCEL_STOP)
 
     def start_impedance(self) -> None:
         self.impedance_mode = True

@@ -19,7 +19,12 @@ from PyQt6.QtWidgets import (
 
 from ganglion_studio.core import board_config as cfg
 from ganglion_studio.core.board_manager import BoardManager
-from ganglion_studio.core.dsp import FilterSettings, apply_filters, channel_stats
+from ganglion_studio.core.dsp import (
+    FilterSettings,
+    apply_filters,
+    channel_stats,
+    is_railed,
+)
 
 _QUALITY_COLORS = {"good": "#5fd38d", "ok": "#e2c044", "bad": "#f7766f"}
 _COLUMNS = ["Ch", "RMS", "P-P", "Std", "Dom", "Line", "Q"]
@@ -83,6 +88,12 @@ class StatsPanel(QGroupBox):
                 continue
             filtered = apply_filters(data[i], sr, settings)
             stats = channel_stats(filtered, sr)
+            # Railing/clipping is a property of the raw signal; the display
+            # bandpass removes the DC offset that characterizes it, so check the
+            # unfiltered slice and let it dominate the contact-quality flag.
+            if is_railed(data[i]):
+                stats["railed"] = True
+                stats["quality"] = "bad"
             self._set_row(i, stats)
             rms_values.append(stats["rms"])
 

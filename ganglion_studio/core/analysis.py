@@ -21,10 +21,11 @@ from scipy.stats import pearsonr, spearmanr, ttest_ind
 
 from matplotlib.figure import Figure
 
+# CHANNEL_TYPES / ELECTRODES live in board_config (single source of truth) and are
+# re-exported here so the live Channel Setup dialog and the Processing Lab (which
+# imports them from this module) always offer identical lists.
+from .board_config import CHANNEL_TYPES, ELECTRODES  # noqa: F401  (re-exported)
 from .dsp import EEG_BANDS, compute_psd, dominant_frequency, signal_quality
-
-CHANNEL_TYPES = ["EEG", "ECG", "EMG", "MISC"]
-ELECTRODES = ["Ag/AgCl (wet)", "Ag/AgCl (dry)", "PEDOT:PSS", "PEDOT", "Other"]
 
 _ELECTRODE_COLORS = {
     "Ag/AgCl (wet)": "#4f8ef7",
@@ -87,13 +88,15 @@ def channel_metrics(channel: np.ndarray, sampling_rate: int) -> dict:
     bands = _band_powers(freqs, psd) if freqs.size else {b[0]: 0.0 for b in EEG_BANDS}
     total = float(sum(bands.values())) + 1e-12
     alpha = bands.get("Alpha", 0.0)
-    snr_db = 10.0 * np.log10(alpha / (total - alpha + 1e-12) + 1e-12)
+    # Alpha-band power relative to the other EEG bands, in dB. This is an
+    # alpha-dominance ratio, NOT a true signal-to-noise ratio.
+    alpha_ratio_db = 10.0 * np.log10(alpha / (total - alpha + 1e-12) + 1e-12)
     return {
         "rms": sq["rms"],
         "ptp": sq["ptp"],
         "line_ratio": sq["line_ratio"],
         "dominant_hz": dominant_frequency(channel, sampling_rate),
-        "snr_db": float(snr_db),
+        "alpha_ratio_db": float(alpha_ratio_db),
         "bands": bands,
         "rel_bands": {k: v / total for k, v in bands.items()},
     }
@@ -238,14 +241,14 @@ def fig_quality_table(eeg: np.ndarray, sr: int, metas: List[ChannelMeta]) -> Fig
     fig = _new_fig(8.0, 0.5 + 0.4 * (len(metas) + 1))
     ax = fig.add_subplot(111)
     ax.axis("off")
-    cols = ["Channel", "Type", "Electrode", "RMS (uV)", "P-P (uV)", "Line %", "SNR (dB)", "Dom (Hz)"]
+    cols = ["Channel", "Type", "Electrode", "RMS (uV)", "P-P (uV)", "Line %", "Alpha ratio (dB)", "Dom (Hz)"]
     rows = []
     for m in metas:
         mt = channel_metrics(eeg[m.index], sr)
         rows.append([
             m.name, m.ch_type, m.electrode,
             f"{mt['rms']:.1f}", f"{mt['ptp']:.0f}",
-            f"{mt['line_ratio'] * 100:.0f}", f"{mt['snr_db']:.1f}", f"{mt['dominant_hz']:.1f}",
+            f"{mt['line_ratio'] * 100:.0f}", f"{mt['alpha_ratio_db']:.1f}", f"{mt['dominant_hz']:.1f}",
         ])
     table = ax.table(cellText=rows, colLabels=cols, loc="center", cellLoc="center")
     table.auto_set_font_size(False)
@@ -499,7 +502,8 @@ def fig_pair_stats_table(x: np.ndarray, y: np.ndarray, sr: int, ag: dict,
         [f"RMS {label_x} / {label_y} (uV)", f"{mx['rms']:.1f} / {my['rms']:.1f}"],
         [f"Line noise {label_x} / {label_y} (%)",
          f"{mx['line_ratio'] * 100:.0f} / {my['line_ratio'] * 100:.0f}"],
-        [f"SNR {label_x} / {label_y} (dB)", f"{mx['snr_db']:.1f} / {my['snr_db']:.1f}"],
+        [f"Alpha ratio {label_x} / {label_y} (dB)",
+         f"{mx['alpha_ratio_db']:.1f} / {my['alpha_ratio_db']:.1f}"],
     ]
     for name in [b[0] for b in EEG_BANDS]:
         rows.append([f"Coherence {name}", f"{ag['band_coherence'].get(name, float('nan')):.3f}"])

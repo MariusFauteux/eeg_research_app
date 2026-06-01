@@ -55,7 +55,7 @@ all with full control over board, channels, filters and markers.
     overlay, coloured by electrode material.
   - *Compare channels*: pick any two channels (A vs B) and compare them with a
     statistics table (Pearson + Spearman r, RMSE/NRMSE, per-band coherence,
-    Bland-Altman bias/LoA, per-channel RMS/line-noise/SNR), overlaid time series,
+    Bland-Altman bias/LoA, per-channel RMS/line-noise/alpha-ratio), overlaid time series,
     PSD overlay, coherence, correlation scatter, cross-correlation, amplitude
     histograms, and band-power comparison.
   - *Material groups* (shown when both PEDOT and Ag/AgCl are present): group-mean
@@ -81,7 +81,6 @@ all with full control over board, channels, filters and markers.
 - **Live impedance** - per-electrode bars colour-coded good/ok/bad with an
   impedance-over-time history (electrode characterization).
 - **Band power** - delta / theta / alpha / beta / gamma averaged over active channels.
-- **Accelerometer / motion** - X/Y/Z traces for movement-artifact monitoring.
 
 ### Full board & plot control
 - **Channels**: enable/disable each of the 4 Ganglion channels. Toggling sends the
@@ -90,7 +89,6 @@ all with full control over board, channels, filters and markers.
   and detrend. Filters never alter recorded raw data.
 - **Plot controls**: refresh rate, window, amplitude, frequency range, channel select.
 - **Impedance test**: start/stop the Ganglion LeadOff impedance test (`z`/`Z`).
-- **Accelerometer**: enable/disable (`n`/`N`).
 
 ### Markers / annotations
 - Define marker types (label + numeric code + colour). Fire them with a button **or a
@@ -150,6 +148,9 @@ python -m ganglion_studio.main
 - If scanning is unavailable, you can still enter the board MAC manually or use Demo mode.
 
 ## Notes
+- The accelerometer is kept **disabled** so the Ganglion streams EEG as 19-bit
+  deltas; enabling it would drop the EEG to 18-bit. There is no motion/accel view
+  by design (the `N` disable command is sent once on stream start).
 - The cloud/CI environment used to develop this app has no Bluetooth radio, so real
   hardware streaming must be validated on your own machine. The full UI and data
   pipeline are validated in Demo mode (`smoke_test.py`).
@@ -173,7 +174,7 @@ ganglion_studio/
     session_view.py       # toolbar, panels, plot tabs, refresh timer
     theme.py              # dark theme
     widgets/              # time_series, psd, spectrogram, impedance, band_power,
-                          # accel, channel_panel, filter_panel, marker_panel
+                          # channel_panel, filter_panel, marker_panel
 ```
 
 ## Ideas / possible add-ons

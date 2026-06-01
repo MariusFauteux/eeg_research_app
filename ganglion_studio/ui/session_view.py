@@ -25,7 +25,6 @@ from ganglion_studio.core.dsp import FilterSettings
 from ganglion_studio.core.session import MarkerEvent, SessionConfig, SessionRecorder
 from ganglion_studio.ui.channel_setup_dialog import ChannelSetupDialog
 from ganglion_studio.ui.review_window import ReviewWindow
-from ganglion_studio.ui.widgets.accel_widget import AccelWidget
 from ganglion_studio.ui.widgets.band_power_widget import BandPowerWidget
 from ganglion_studio.ui.widgets.channel_panel import ChannelPanel
 from ganglion_studio.ui.widgets.filter_panel import FilterPanel
@@ -157,14 +156,12 @@ class SessionView(QWidget):
         self.spectrogram = SpectrogramWidget(self._manager)
         self.impedance = ImpedanceWidget(self._manager)
         self.band_power = BandPowerWidget(self._manager)
-        self.accel = AccelWidget(self._manager)
 
         self.tabs.addTab(self.time_series, "Time Series")
         self.tabs.addTab(self.psd, "PSD")
         self.tabs.addTab(self.spectrogram, "Spectrogram / FFT")
         self.tabs.addTab(self.impedance, "Impedance")
         self.tabs.addTab(self.band_power, "Band Power")
-        self.tabs.addTab(self.accel, "Accel / Motion")
         return self.tabs
 
     def _build_right_panel(self) -> QWidget:

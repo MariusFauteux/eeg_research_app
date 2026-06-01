@@ -112,19 +112,15 @@ class SessionRecorder:
     def _try_export_edf(self, raw_data: np.ndarray, meta: dict) -> Optional[str]:
         if raw_data is None or raw_data.ndim != 2 or raw_data.shape[1] == 0:
             return None
-        try:
-            import mne  # type: ignore
-        except Exception:
+        from .exporter import export, mne_available
+        if not mne_available():
             return None
         try:
-            eeg_channels = meta.get("eeg_channels", [])
-            ch_names = meta.get("channel_names", [f"Ch{i+1}" for i in range(len(eeg_channels))])
-            sfreq = meta.get("sampling_rate", 200)
-            eeg = raw_data[eeg_channels, :] * 1e-6  # uV -> V
-            info = mne.create_info(ch_names=list(ch_names), sfreq=sfreq, ch_types="eeg")
-            mne_raw = mne.io.RawArray(eeg, info, verbose="ERROR")
-            edf_path = self._path("_raw.edf")
-            mne.export.export_raw(edf_path, mne_raw, fmt="edf", overwrite=True, verbose="ERROR")
-            return edf_path
+            # Reuse the central exporter (handles uV->V scaling + EEG channel
+            # selection in one place). Auto-EDF is marker-free: markers are still
+            # written to _markers.csv and the raw CSV marker channel, and
+            # sample-aligned annotations are written by the Review window's
+            # explicit export path.
+            return export(self._path("_raw.edf"), "edf", raw_data, meta)
         except Exception:
             return None

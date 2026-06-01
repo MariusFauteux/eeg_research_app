@@ -24,3 +24,7 @@ edfio>=0.4
 # the UI if the corresponding backend is not installed.
 meegkit>=0.1.7
 neurokit2>=0.2
+
+# Development / testing only (not needed to run the app).
+#   pytest - unit tests under tests/ (run: python -m pytest tests/ -q)
+pytest>=7.0
