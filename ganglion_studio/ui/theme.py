@@ -6,10 +6,14 @@ import pyqtgraph as pg
 from PyQt6.QtGui import QColor, QPalette
 from PyQt6.QtWidgets import QApplication
 
-BG = "#1b1d23"
-BG_ALT = "#23262e"
-FG = "#e6e6e6"
-ACCENT = "#4f8ef7"
+# Chrome colours come from the central palette; re-exported here so existing
+# `from ...ui.theme import BG, FG, ...` style imports keep working.
+from ganglion_studio.palette import ACCENT, BG, BG_ALT, FG, MUTED, WHITE
+
+# Reusable stylesheet snippets for the muted "hint/caption" labels that recur
+# across panels, so restyling them happens in one place.
+MUTED_QSS = f"color: {MUTED};"
+HINT_QSS = f"color: {MUTED}; font-size: 11px;"
 
 
 def apply_dark_theme(app: QApplication) -> None:
@@ -23,7 +27,7 @@ def apply_dark_theme(app: QApplication) -> None:
     palette.setColor(QPalette.ColorRole.Button, QColor(BG_ALT))
     palette.setColor(QPalette.ColorRole.ButtonText, QColor(FG))
     palette.setColor(QPalette.ColorRole.Highlight, QColor(ACCENT))
-    palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
+    palette.setColor(QPalette.ColorRole.HighlightedText, QColor(WHITE))
     palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(BG_ALT))
     palette.setColor(QPalette.ColorRole.ToolTipText, QColor(FG))
     app.setPalette(palette)

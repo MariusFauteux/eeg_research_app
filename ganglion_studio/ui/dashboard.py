@@ -22,9 +22,11 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from ganglion_studio import palette
 from ganglion_studio.core import ble_scanner
 from ganglion_studio.core.ble_scanner import BleDevice, BleUnavailable
 from ganglion_studio.core.session import SessionConfig
+from ganglion_studio.ui import theme
 
 
 class ScanWorker(QThread):
@@ -64,9 +66,9 @@ class Dashboard(QWidget):
         root.setSpacing(16)
 
         title = QLabel("Ganglion EEG Studio")
-        title.setStyleSheet("font-size: 26px; font-weight: 700; color: #4f8ef7;")
+        title.setStyleSheet(f"font-size: 26px; font-weight: 700; color: {palette.ACCENT};")
         subtitle = QLabel("Connect to your OpenBCI Ganglion over native Bluetooth")
-        subtitle.setStyleSheet("color: #9aa0aa;")
+        subtitle.setStyleSheet(theme.MUTED_QSS)
         header = QHBoxLayout()
         header_text = QVBoxLayout()
         header_text.addWidget(title)
@@ -101,7 +103,7 @@ class Dashboard(QWidget):
         scan_layout.addWidget(self.device_list, 1)
 
         self.scan_status = QLabel("Idle. Click Scan, or use Demo mode.")
-        self.scan_status.setStyleSheet("color: #9aa0aa;")
+        self.scan_status.setStyleSheet(theme.MUTED_QSS)
         scan_layout.addWidget(self.scan_status)
         body.addWidget(scan_box, 2)
 

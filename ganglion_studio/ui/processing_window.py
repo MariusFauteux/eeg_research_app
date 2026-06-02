@@ -27,12 +27,14 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from ganglion_studio import palette
 from ganglion_studio.core import board_config as cfg
 from ganglion_studio.core import processing as proc
 from ganglion_studio.core.analysis import CHANNEL_TYPES, ELECTRODES, ChannelMeta
 from ganglion_studio.core.dsp import FILTER_TYPES, compute_psd
 from ganglion_studio.core.recording_loader import LoadError, LoadedRecording, load_recording
 from ganglion_studio.ui.analysis_window import AnalysisWindow
+from ganglion_studio.ui import theme
 
 
 class ProcessingWorker(QThread):
@@ -95,7 +97,7 @@ class ProcessingWindow(QWidget):
         fb.addWidget(self.open_btn)
         self.file_label = QLabel("No file loaded")
         self.file_label.setWordWrap(True)
-        self.file_label.setStyleSheet("color:#9aa0aa; font-size:11px;")
+        self.file_label.setStyleSheet(theme.HINT_QSS)
         fb.addWidget(self.file_label)
         layout.addWidget(file_box)
 
@@ -115,7 +117,7 @@ class ProcessingWindow(QWidget):
         self.channels_box = QGroupBox("Channels (type / electrode)")
         self.channels_layout = QVBoxLayout(self.channels_box)
         self._channels_hint = QLabel("Load a recording to configure channels.")
-        self._channels_hint.setStyleSheet("color:#9aa0aa; font-size:11px;")
+        self._channels_hint.setStyleSheet(theme.HINT_QSS)
         self.channels_layout.addWidget(self._channels_hint)
         self._type_combos: List[QComboBox] = []
         self._elec_combos: List[QComboBox] = []
@@ -139,7 +141,7 @@ class ProcessingWindow(QWidget):
         layout.addWidget(self.analysis_btn)
         self.status = QLabel("Load a recording to begin.")
         self.status.setWordWrap(True)
-        self.status.setStyleSheet("color:#9aa0aa; font-size:11px;")
+        self.status.setStyleSheet(theme.HINT_QSS)
         layout.addWidget(self.status)
         layout.addStretch(1)
 
@@ -160,9 +162,9 @@ class ProcessingWindow(QWidget):
         self.bp_chk.setChecked(True)
         self.bp_chk.toggled.connect(self._schedule)
         form.addRow(self.bp_chk)
-        self.low_spin = self._dspin(0.1, 95.0, 1.0, " Hz")
+        self.low_spin = self._dspin(0.1, 95.0, 1.0, " Hz", self._schedule)
         form.addRow("Low cut", self.low_spin)
-        self.high_spin = self._dspin(1.0, 99.0, 45.0, " Hz")
+        self.high_spin = self._dspin(1.0, 99.0, 45.0, " Hz", self._schedule)
         form.addRow("High cut", self.high_spin)
         self.order_spin = QSpinBox()
         self.order_spin.setRange(1, 8)
@@ -216,7 +218,7 @@ class ProcessingWindow(QWidget):
         box.toggled.connect(self._schedule)
         self.asr_box = box
         form = QFormLayout(box)
-        self.asr_cutoff = self._dspin(1.0, 100.0, 20.0, " SD")
+        self.asr_cutoff = self._dspin(1.0, 100.0, 20.0, " SD", self._schedule)
         form.addRow("Cutoff", self.asr_cutoff)
         if not self._avail.get("asr"):
             box.setChecked(False)
@@ -234,9 +236,9 @@ class ProcessingWindow(QWidget):
         self.aas_ref = QComboBox()
         self.aas_ref.currentIndexChanged.connect(self._schedule)
         form.addRow("ECG ref channel", self.aas_ref)
-        self.aas_pre = self._dspin(50.0, 1000.0, 250.0, " ms")
+        self.aas_pre = self._dspin(50.0, 1000.0, 250.0, " ms", self._schedule)
         form.addRow("Window before R", self.aas_pre)
-        self.aas_post = self._dspin(50.0, 1000.0, 450.0, " ms")
+        self.aas_post = self._dspin(50.0, 1000.0, 450.0, " ms", self._schedule)
         form.addRow("Window after R", self.aas_post)
         self.aas_agg = QComboBox()
         self.aas_agg.addItems(["median", "mean"])
@@ -248,12 +250,19 @@ class ProcessingWindow(QWidget):
             box.setToolTip("Install 'neurokit2' to enable R-peak detection")
         return box
 
-    def _dspin(self, lo, hi, val, suffix) -> QDoubleSpinBox:
+    def _dspin(self, lo, hi, val, suffix, on_change=None) -> QDoubleSpinBox:
+        """Build a configured QDoubleSpinBox.
+
+        ``on_change`` is connected to ``valueChanged`` when given. Most config
+        spinners pass ``self._schedule`` (debounced recompute); the view spinners
+        pass their own redraw slot.
+        """
         s = QDoubleSpinBox()
         s.setRange(lo, hi)
         s.setValue(val)
         s.setSuffix(suffix)
-        s.valueChanged.connect(self._schedule)
+        if on_change is not None:
+            s.valueChanged.connect(on_change)
         return s
 
     # ------------------------------------------------------------- views UI
@@ -268,12 +277,10 @@ class ProcessingWindow(QWidget):
         self.view_combo.currentTextChanged.connect(self._on_view_mode)
         bar.addWidget(self.view_combo)
         bar.addWidget(QLabel("Window"))
-        self.window_spin = self._plain_dspin(1.0, 60.0, 10.0, " s")
-        self.window_spin.valueChanged.connect(self._on_view_changed)
+        self.window_spin = self._dspin(1.0, 60.0, 10.0, " s", self._on_view_changed)
         bar.addWidget(self.window_spin)
         bar.addWidget(QLabel("Amplitude"))
-        self.amp_spin = self._plain_dspin(1.0, 100000.0, 200.0, " uV")
-        self.amp_spin.valueChanged.connect(self._redraw_all)
+        self.amp_spin = self._dspin(1.0, 100000.0, 200.0, " uV", self._redraw_all)
         bar.addWidget(self.amp_spin)
         bar.addStretch(1)
         layout.addLayout(bar)
@@ -291,13 +298,6 @@ class ProcessingWindow(QWidget):
         self.scrollbar.valueChanged.connect(self._on_scroll)
         layout.addWidget(self.scrollbar)
         return container
-
-    def _plain_dspin(self, lo, hi, val, suffix) -> QDoubleSpinBox:
-        s = QDoubleSpinBox()
-        s.setRange(lo, hi)
-        s.setValue(val)
-        s.setSuffix(suffix)
-        return s
 
     def _make_plot(self, title: str):
         pw = pg.PlotWidget()
@@ -376,7 +376,7 @@ class ProcessingWindow(QWidget):
         header = QHBoxLayout()
         for text in ("On", "Channel", "Type", "Electrode"):
             lab = QLabel(text)
-            lab.setStyleSheet("color:#9aa0aa; font-size:10px; font-weight:600;")
+            lab.setStyleSheet(f"color:{palette.MUTED}; font-size:10px; font-weight:600;")
             header.addWidget(lab)
         hw = QWidget()
         hw.setLayout(header)

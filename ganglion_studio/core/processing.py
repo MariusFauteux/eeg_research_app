@@ -164,7 +164,12 @@ def detect_rpeaks(ref_channel: np.ndarray, sampling_rate: int) -> np.ndarray:
 # --------------------------------------------------------------------------- #
 def apply_aas(eeg: np.ndarray, sampling_rate: int, cfg: AasStepConfig,
               ) -> Tuple[np.ndarray, str]:
-    """Subtract a median (or mean) cardiac artifact template locked to R-peaks."""
+    """Remove the heart-beat (ECG) artifact that leaks into EEG.
+
+    Averages the signal in a window locked to each detected R-peak to build the
+    beat-shaped artifact template, then subtracts it from every channel (median
+    is robust to the occasional odd beat). Returns (cleaned_eeg, message).
+    """
     out = eeg.copy()
     ref_idx = cfg.ref_channel
     if ref_idx < 0 or ref_idx >= eeg.shape[0]:
@@ -201,6 +206,12 @@ def apply_aas(eeg: np.ndarray, sampling_rate: int, cfg: AasStepConfig,
 # --------------------------------------------------------------------------- #
 def apply_asr(eeg: np.ndarray, sampling_rate: int, ch_names: List[str],
               cfg: AsrStepConfig) -> Tuple[np.ndarray, str]:
+    """Artifact Subspace Reconstruction (meegkit).
+
+    Learns what 'clean' EEG looks like, then rebuilds short segments that deviate
+    too far from it (eye blinks, jaw clench, motion). ``cutoff`` is in standard
+    deviations -- lower removes more. Returns (cleaned_eeg, message).
+    """
     try:
         _ensure_asr_compat()
         from meegkit.asr import ASR
@@ -222,6 +233,12 @@ def apply_asr(eeg: np.ndarray, sampling_rate: int, ch_names: List[str],
 # Wavelet (BrainFlow)
 # --------------------------------------------------------------------------- #
 def apply_wavelet(eeg: np.ndarray, cfg: WaveletStepConfig) -> Tuple[np.ndarray, str]:
+    """Wavelet denoising (BrainFlow).
+
+    Decomposes each channel into wavelets and shrinks the small coefficients
+    (assumed to be noise), smoothing the trace while keeping sharp transients.
+    Returns (cleaned_eeg, message).
+    """
     wt = getattr(WaveletTypes, cfg.wavelet, WaveletTypes.DB4)
     den = getattr(WaveletDenoisingTypes, cfg.denoising, WaveletDenoisingTypes.SURESHRINK)
     thr = getattr(ThresholdTypes, cfg.threshold, ThresholdTypes.SOFT)
@@ -247,6 +264,8 @@ def apply_pipeline(eeg: np.ndarray, sampling_rate: int, ch_names: List[str],
         return eeg, ["No data to process."]
     data = np.ascontiguousarray(eeg, dtype=np.float64).copy()
 
+    # Common Average Reference (CAR): subtract the across-channel mean so noise
+    # shared by all electrodes (e.g. reference drift) cancels out.
     if config.reref_car and data.shape[0] > 1:
         active = config.active_channels
         if active:

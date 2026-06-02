@@ -21,19 +21,15 @@ from scipy.stats import pearsonr, spearmanr, ttest_ind
 
 from matplotlib.figure import Figure
 
+from ganglion_studio import palette
 # CHANNEL_TYPES / ELECTRODES live in board_config (single source of truth) and are
 # re-exported here so the live Channel Setup dialog and the Processing Lab (which
 # imports them from this module) always offer identical lists.
 from .board_config import CHANNEL_TYPES, ELECTRODES  # noqa: F401  (re-exported)
 from .dsp import EEG_BANDS, compute_psd, dominant_frequency, signal_quality
 
-_ELECTRODE_COLORS = {
-    "Ag/AgCl (wet)": "#4f8ef7",
-    "Ag/AgCl (dry)": "#5fd38d",
-    "PEDOT:PSS": "#f7766f",
-    "PEDOT": "#e2722c",
-    "Other": "#9aa0aa",
-}
+# Electrode-material colours come from the central palette.
+_ELECTRODE_COLORS = palette.ELECTRODE_COLORS
 
 
 @dataclass
@@ -116,9 +112,13 @@ def pair_agreement(x: np.ndarray, y: np.ndarray, sampling_rate: int) -> dict:
         rho, _ps = spearmanr(x, y)
     except Exception:
         rho = float("nan")
+    # RMSE = typical sample-to-sample difference; NRMSE normalizes it by the
+    # signal range so 0 = identical traces, regardless of amplitude.
     rmse = float(np.sqrt(np.mean((x - y) ** 2)))
     rng = float(np.ptp(np.concatenate([x, y]))) + 1e-12
     nrmse = rmse / rng
+    # Magnitude-squared coherence: how linearly related the two signals are at
+    # each frequency, from 0 (unrelated) to 1 (perfectly related).
     nperseg = int(min(256, max(32, n // 8)))
     f, cxy = _coherence(x, y, fs=sampling_rate, nperseg=nperseg)
     band_mask = (f >= 1.0) & (f <= 30.0)
@@ -127,6 +127,8 @@ def pair_agreement(x: np.ndarray, y: np.ndarray, sampling_rate: int) -> dict:
     for name, lo, hi in EEG_BANDS:
         m = (f >= lo) & (f < hi)
         band_coh[name] = float(np.mean(cxy[m])) if np.any(m) else float("nan")
+    # Bland-Altman agreement: bias = average difference between the channels;
+    # limits of agreement = bias +/- 1.96 SD (where ~95% of differences fall).
     diff = x - y
     bias = float(np.mean(diff))
     sd = float(np.std(diff))
@@ -323,7 +325,7 @@ def _group_psd(eeg, sr, metas, material) -> Tuple[np.ndarray, np.ndarray, np.nda
 def fig_cmp_psd(eeg: np.ndarray, sr: int, metas: List[ChannelMeta]) -> Figure:
     fig = _new_fig()
     ax = fig.add_subplot(111)
-    for material, color in (("PEDOT", "#f7766f"), ("Ag/AgCl", "#4f8ef7")):
+    for material, color in (("PEDOT", palette.MATERIAL_PEDOT), ("Ag/AgCl", palette.MATERIAL_AGAGCL)):
         f, mean, std = _group_psd(eeg, sr, metas, material)
         if f.size and mean.size:
             ax.semilogy(f, mean, color=color, lw=1.6, label=f"{material} (mean)")
@@ -341,7 +343,7 @@ def fig_cmp_coherence(x: np.ndarray, y: np.ndarray, sr: int, ag: dict,
                       label_x: str, label_y: str) -> Figure:
     fig = _new_fig()
     ax = fig.add_subplot(111)
-    ax.plot(ag["coh_freqs"], ag["coherence"], color="#5fd38d", lw=1.4)
+    ax.plot(ag["coh_freqs"], ag["coherence"], color=palette.GOOD, lw=1.4)
     ax.axhline(1.0, color="gray", lw=0.6, ls=":")
     ax.set_xlim(0, min(70, sr / 2))
     ax.set_ylim(0, 1.05)
@@ -359,7 +361,7 @@ def fig_cmp_correlation(x: np.ndarray, y: np.ndarray, ag: dict,
     n = min(x.size, y.size)
     step = max(1, n // 3000)
     xs, ys = x[:n:step], y[:n:step]
-    ax.scatter(xs, ys, s=4, alpha=0.3, color="#4f8ef7")
+    ax.scatter(xs, ys, s=4, alpha=0.3, color=palette.ACCENT)
     lim = float(np.nanmax(np.abs(np.concatenate([xs, ys])))) if xs.size else 1.0
     ax.plot([-lim, lim], [-lim, lim], color="gray", lw=0.8, ls="--", label="y = x")
     ax.set_xlabel(f"{label_x} (uV)")
@@ -378,11 +380,11 @@ def fig_cmp_bland_altman(x: np.ndarray, y: np.ndarray, ag: dict,
     step = max(1, n // 3000)
     mean = (x[:n:step] + y[:n:step]) / 2.0
     diff = x[:n:step] - y[:n:step]
-    ax.scatter(mean, diff, s=4, alpha=0.3, color="#b48ef7")
+    ax.scatter(mean, diff, s=4, alpha=0.3, color=palette.VIOLET)
     ax.axhline(ag["ba_bias"], color="#333", lw=1.0, label=f"bias = {ag['ba_bias']:.2f}")
-    ax.axhline(ag["ba_loa_high"], color="#f7766f", lw=0.9, ls="--",
+    ax.axhline(ag["ba_loa_high"], color=palette.BAD, lw=0.9, ls="--",
                label=f"+1.96 SD = {ag['ba_loa_high']:.2f}")
-    ax.axhline(ag["ba_loa_low"], color="#f7766f", lw=0.9, ls="--",
+    ax.axhline(ag["ba_loa_low"], color=palette.BAD, lw=0.9, ls="--",
                label=f"-1.96 SD = {ag['ba_loa_low']:.2f}")
     ax.set_xlabel(f"Mean of {label_x} & {label_y} (uV)")
     ax.set_ylabel(f"Difference ({label_x} - {label_y}) (uV)")
@@ -398,8 +400,8 @@ def fig_pair_timeseries(x: np.ndarray, y: np.ndarray, sr: int,
     ax = fig.add_subplot(111)
     n = int(min(len(x), len(y), window_s * sr))
     t = np.arange(n) / sr
-    ax.plot(t, x[:n], color="#f7766f", lw=0.9, label=label_x)
-    ax.plot(t, y[:n], color="#4f8ef7", lw=0.9, label=label_y)
+    ax.plot(t, x[:n], color=palette.BAD, lw=0.9, label=label_x)
+    ax.plot(t, y[:n], color=palette.ACCENT, lw=0.9, label=label_y)
     ax.set_xlabel("Time (s)")
     ax.set_ylabel("Amplitude (uV)")
     ax.set_title(f"Overlaid time series (first {window_s:.0f} s)")
@@ -415,9 +417,9 @@ def fig_pair_psd(x: np.ndarray, y: np.ndarray, sr: int,
     fx, px = compute_psd(np.ascontiguousarray(x), sr)
     fy, py = compute_psd(np.ascontiguousarray(y), sr)
     if fx.size:
-        ax.semilogy(fx, px, color="#f7766f", lw=1.4, label=label_x)
+        ax.semilogy(fx, px, color=palette.BAD, lw=1.4, label=label_x)
     if fy.size:
-        ax.semilogy(fy, py, color="#4f8ef7", lw=1.4, label=label_y)
+        ax.semilogy(fy, py, color=palette.ACCENT, lw=1.4, label=label_y)
     ax.set_xlim(0, min(70, sr / 2))
     ax.set_xlabel("Frequency (Hz)")
     ax.set_ylabel(r"PSD ($\mu V^2$/Hz)")
@@ -433,8 +435,8 @@ def fig_pair_histogram(x: np.ndarray, y: np.ndarray,
     ax = fig.add_subplot(111)
     lim = float(np.percentile(np.abs(np.concatenate([x, y])), 99)) or 1.0
     bins = np.linspace(-lim, lim, 80)
-    ax.hist(x, bins=bins, color="#f7766f", alpha=0.5, label=label_x, density=True)
-    ax.hist(y, bins=bins, color="#4f8ef7", alpha=0.5, label=label_y, density=True)
+    ax.hist(x, bins=bins, color=palette.BAD, alpha=0.5, label=label_x, density=True)
+    ax.hist(y, bins=bins, color=palette.ACCENT, alpha=0.5, label=label_y, density=True)
     ax.set_xlabel("Amplitude (uV)")
     ax.set_ylabel("Density")
     ax.set_title("Amplitude distribution")
@@ -455,7 +457,7 @@ def fig_pair_cross_correlation(x: np.ndarray, y: np.ndarray, sr: int,
     corr = _correlate(a, b, mode="full") / denom
     lags = np.arange(-n + 1, n) / sr
     m = np.abs(lags) <= max_lag_s
-    ax.plot(lags[m] * 1000.0, corr[m], color="#5fd38d", lw=1.2)
+    ax.plot(lags[m] * 1000.0, corr[m], color=palette.GOOD, lw=1.2)
     peak_lag = lags[m][int(np.argmax(corr[m]))] * 1000.0
     ax.axvline(peak_lag, color="gray", ls=":", lw=0.8)
     ax.set_xlabel("Lag (ms)")
@@ -476,8 +478,8 @@ def fig_pair_bandpower_ratio(x: np.ndarray, y: np.ndarray, sr: int,
     by = _band_powers(fy, py) if fy.size else {n: 0.0 for n in names}
     idx = np.arange(len(names))
     w = 0.38
-    ax.bar(idx - w / 2, [bx[n] for n in names], w, color="#f7766f", label=label_x)
-    ax.bar(idx + w / 2, [by[n] for n in names], w, color="#4f8ef7", label=label_y)
+    ax.bar(idx - w / 2, [bx[n] for n in names], w, color=palette.BAD, label=label_x)
+    ax.bar(idx + w / 2, [by[n] for n in names], w, color=palette.ACCENT, label=label_y)
     ax.set_yscale("log")
     ax.set_xticks(idx)
     ax.set_xticklabels(names)
@@ -527,7 +529,7 @@ def fig_cmp_bandpower(eeg: np.ndarray, sr: int, metas: List[ChannelMeta]) -> Fig
     bands = stats["bands"]
     x = np.arange(len(bands))
     width = 0.38
-    order = [("PEDOT", "#f7766f", -width / 2), ("Ag/AgCl", "#4f8ef7", width / 2)]
+    order = [("PEDOT", palette.MATERIAL_PEDOT, -width / 2), ("Ag/AgCl", palette.MATERIAL_AGAGCL, width / 2)]
     for name, color, off in order:
         g = stats["groups"].get(name)
         if not g:

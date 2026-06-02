@@ -8,10 +8,13 @@ import numpy as np
 import pyqtgraph as pg
 from PyQt6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
+from ganglion_studio import palette
 from ganglion_studio.core.board_manager import BoardManager
 from ganglion_studio.core.dsp import FilterSettings, compute_band_powers
+from ganglion_studio.ui import theme
 
-_BAND_COLORS = ["#b48ef7", "#4f8ef7", "#5fd38d", "#e2c044", "#f7766f"]
+# One bar colour per EEG band, in dsp.EEG_BANDS order (Delta..Gamma).
+_BAND_COLORS = palette.BAND_COLORS
 
 
 class BandPowerWidget(QWidget):
@@ -22,7 +25,7 @@ class BandPowerWidget(QWidget):
         self._manager = manager
         root = QVBoxLayout(self)
         title = QLabel("Relative band power, averaged over active channels (last 4 s)")
-        title.setStyleSheet("color:#9aa0aa;")
+        title.setStyleSheet(theme.MUTED_QSS)
         root.addWidget(title)
 
         self._plot = pg.PlotWidget()

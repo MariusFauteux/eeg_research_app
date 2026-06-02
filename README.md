@@ -5,8 +5,14 @@ EEG board over **native Bluetooth**, built on [BrainFlow](https://brainflow.org/
 PyQt6 and pyqtgraph.
 
 Scan for your Ganglion, name a recording session, and open a rich session view with
-live time series, PSD, spectrogram/FFT, live impedance, band power and motion plots -
+live time series, PSD, spectrogram/FFT, live impedance and band power -
 all with full control over board, channels, filters and markers.
+
+## Documentation
+- **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** - how the app is organised and
+  how data flows through it (start here to understand the code).
+- **[docs/EXTENDING.md](docs/EXTENDING.md)** - recipes for adding a plot tab, a
+  processing step, or an analysis-report figure.
 
 ## Features
 

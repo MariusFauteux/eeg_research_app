@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from ganglion_studio import palette
 from ganglion_studio.core import board_config as cfg
 from ganglion_studio.core.board_manager import BoardManager
 from ganglion_studio.core.dsp import FilterSettings, apply_filters
@@ -137,7 +138,7 @@ class TimeSeriesWidget(QWidget):
                 for pi in visible:
                     line = pg.InfiniteLine(
                         angle=90,
-                        pen=pg.mkPen("#f7766f", width=1, style=pg.QtCore.Qt.PenStyle.DashLine),
+                        pen=pg.mkPen(palette.MARKER, width=1, style=pg.QtCore.Qt.PenStyle.DashLine),
                     )
                     self._plots[pi].addItem(line)
                     self._marker_lines.append((line, self._plots[pi]))

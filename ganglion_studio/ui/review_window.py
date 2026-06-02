@@ -25,10 +25,12 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from ganglion_studio import palette
 from ganglion_studio.core import board_config as cfg
 from ganglion_studio.core import exporter
 from ganglion_studio.core.dsp import FilterSettings, apply_filters
 from ganglion_studio.core.exporter import ReviewMarker
+from ganglion_studio.ui import theme
 
 
 class ReviewWindow(QMainWindow):
@@ -89,7 +91,7 @@ class ReviewWindow(QMainWindow):
         bar = QHBoxLayout()
         info = QLabel(f"{self._n} ch | {self._sr} Hz | {self._duration:0.1f} s "
                       f"| {len(self._markers)} markers")
-        info.setStyleSheet("color:#9aa0aa;")
+        info.setStyleSheet(theme.MUTED_QSS)
         self._info_label = info
         bar.addWidget(info)
         bar.addStretch(1)
@@ -135,7 +137,7 @@ class ReviewWindow(QMainWindow):
             self._curves.append(self._plot.plot(pen=pg.mkPen(color, width=1)))
         self._plot.scene().sigMouseClicked.connect(self._on_plot_clicked)
         self._cursor = pg.InfiniteLine(angle=90, movable=False,
-                                       pen=pg.mkPen("#ffffff", width=1, style=Qt.PenStyle.DotLine))
+                                       pen=pg.mkPen(palette.WHITE, width=1, style=Qt.PenStyle.DotLine))
         self._plot.addItem(self._cursor)
         col.addWidget(self._plot_widget, 1)
 
@@ -176,7 +178,7 @@ class ReviewWindow(QMainWindow):
         layout.addWidget(remove_btn)
 
         hint = QLabel("Click the plot to place the cursor, then Add.")
-        hint.setStyleSheet("color:#9aa0aa; font-size:11px;")
+        hint.setStyleSheet(theme.HINT_QSS)
         hint.setWordWrap(True)
         layout.addWidget(hint)
         return panel
@@ -238,8 +240,8 @@ class ReviewWindow(QMainWindow):
     def _color_for_code(self, code: int) -> str:
         for mt in self._marker_types:
             if getattr(mt, "code", None) == code:
-                return getattr(mt, "color", "#f7766f")
-        return "#f7766f"
+                return getattr(mt, "color", palette.MARKER)
+        return palette.MARKER
 
     # ------------------------------------------------------------- markers
     def _on_plot_clicked(self, event) -> None:

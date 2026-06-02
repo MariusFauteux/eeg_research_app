@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
 )
 
+from ganglion_studio import palette
 from ganglion_studio.core import board_config as cfg
 from ganglion_studio.core.board_manager import BoardManager
 from ganglion_studio.core.dsp import (
@@ -25,8 +26,9 @@ from ganglion_studio.core.dsp import (
     channel_stats,
     is_railed,
 )
+from ganglion_studio.ui import theme
 
-_QUALITY_COLORS = {"good": "#5fd38d", "ok": "#e2c044", "bad": "#f7766f"}
+_QUALITY_COLORS = {"good": palette.GOOD, "ok": palette.OK, "bad": palette.BAD}
 _COLUMNS = ["Ch", "RMS", "P-P", "Std", "Dom", "Line", "Q"]
 
 
@@ -66,7 +68,7 @@ class StatsPanel(QGroupBox):
 
         self.general = QLabel("Waiting for data...")
         self.general.setWordWrap(True)
-        self.general.setStyleSheet("color:#9aa0aa; font-size:11px;")
+        self.general.setStyleSheet(theme.HINT_QSS)
         root.addWidget(self.general)
 
     def set_channel_names(self, names: List[str]) -> None:
@@ -109,7 +111,7 @@ class StatsPanel(QGroupBox):
         if stats is None:
             for c in range(1, len(_COLUMNS)):
                 self.table.item(row, c).setText("off")
-                self.table.item(row, c).setForeground(QColor("#666"))
+                self.table.item(row, c).setForeground(QColor(palette.DISABLED))
             return
         values = [
             f"{stats['rms']:.1f}",
@@ -122,6 +124,6 @@ class StatsPanel(QGroupBox):
         for c, text in enumerate(values, start=1):
             item = self.table.item(row, c)
             item.setText(text)
-            item.setForeground(QColor("#e6e6e6"))
+            item.setForeground(QColor(palette.FG))
         q_item = self.table.item(row, len(_COLUMNS) - 1)
         q_item.setForeground(QColor(_QUALITY_COLORS.get(stats["quality"], "#e6e6e6")))

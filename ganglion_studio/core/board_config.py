@@ -6,6 +6,8 @@ board through BrainFlow's ``BoardShim.config_board``.
 
 from __future__ import annotations
 
+from ganglion_studio import palette
+
 # --- Ganglion ASCII command protocol (OpenBCI Ganglion SDK) ---------------
 # Turn the respective channel [1-4] ON  -> the channel streams ADC values.
 CHANNEL_ON = {0: "!", 1: "@", 2: "#", 3: "$"}
@@ -45,14 +47,9 @@ TEN_TWENTY = [
     "A1", "A2", "M1", "M2", "Custom",
 ]
 
-# A small palette used consistently across the time series / PSD / panels so a
-# channel keeps the same colour everywhere.
-CHANNEL_COLORS = [
-    "#4f8ef7",  # blue
-    "#f7766f",  # red
-    "#5fd38d",  # green
-    "#e2c044",  # yellow
-]
+# Per-channel trace colours live in ganglion_studio.palette (single source of
+# truth); re-exported here for the many call sites that read cfg.CHANNEL_COLORS.
+CHANNEL_COLORS = palette.CHANNEL_COLORS
 
 # Impedance quality thresholds (kOhm). Below "good" is excellent contact.
 IMPEDANCE_GOOD_KOHM = 10.0
@@ -60,11 +57,11 @@ IMPEDANCE_OK_KOHM = 50.0
 
 
 def impedance_color(kohm: float) -> str:
-    """Return a colour string for an impedance value (kOhm)."""
+    """Map an impedance value (kOhm) to a contact-quality colour."""
     if kohm < 0:
-        return "#888888"
+        return palette.NEUTRAL  # unknown / not measured
     if kohm <= IMPEDANCE_GOOD_KOHM:
-        return "#5fd38d"  # green - good
+        return palette.GOOD
     if kohm <= IMPEDANCE_OK_KOHM:
-        return "#e2c044"  # yellow - ok
-    return "#f7766f"  # red - bad
+        return palette.OK
+    return palette.BAD

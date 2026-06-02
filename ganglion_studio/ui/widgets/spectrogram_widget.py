@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from ganglion_studio import palette
 from ganglion_studio.core import board_config as cfg
 from ganglion_studio.core.board_manager import BoardManager
 from ganglion_studio.core.dsp import (
@@ -54,7 +55,7 @@ class SpectrogramWidget(QWidget):
         self._fft_plot.setLabel("left", "Magnitude", units="uV")
         self._fft_plot.setLabel("bottom", "Frequency", units="Hz")
         self._fft_plot.showGrid(x=True, y=True, alpha=0.2)
-        self._fft_curve = self._fft_plot.plot(pen=pg.mkPen("#4f8ef7", width=1.5))
+        self._fft_curve = self._fft_plot.plot(pen=pg.mkPen(palette.ACCENT, width=1.5))
 
     def set_channel_names(self, names: List[str]) -> None:
         for i in range(min(self.ch_combo.count(), len(names))):

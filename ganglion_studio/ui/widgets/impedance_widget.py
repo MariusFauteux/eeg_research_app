@@ -15,9 +15,11 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from ganglion_studio import palette
 from ganglion_studio.core import board_config as cfg
 from ganglion_studio.core.board_manager import BoardManager
 from ganglion_studio.core.dsp import FilterSettings
+from ganglion_studio.ui import theme
 
 
 class ImpedanceWidget(QWidget):
@@ -39,7 +41,7 @@ class ImpedanceWidget(QWidget):
         self.toggle_btn.toggled.connect(self._on_toggle)
         bar.addWidget(self.toggle_btn)
         self.status = QLabel("Impedance test off. EEG streaming continues.")
-        self.status.setStyleSheet("color:#9aa0aa;")
+        self.status.setStyleSheet(theme.MUTED_QSS)
         bar.addWidget(self.status)
         bar.addStretch(1)
         root.addLayout(bar)
@@ -48,7 +50,7 @@ class ImpedanceWidget(QWidget):
             f"Good < {cfg.IMPEDANCE_GOOD_KOHM:.0f} k\u03A9   "
             f"OK < {cfg.IMPEDANCE_OK_KOHM:.0f} k\u03A9   Bad above"
         )
-        legend.setStyleSheet("color:#9aa0aa;")
+        legend.setStyleSheet(theme.MUTED_QSS)
         root.addWidget(legend)
 
         glw = pg.GraphicsLayoutWidget()
@@ -61,7 +63,7 @@ class ImpedanceWidget(QWidget):
             [list(enumerate(self._manager.channel_names[: self._n]))]
         )
         self._bar_item = pg.BarGraphItem(
-            x=list(range(self._n)), height=[0] * self._n, width=0.6, brush="#5fd38d"
+            x=list(range(self._n)), height=[0] * self._n, width=0.6, brush=palette.GOOD
         )
         self._bar_plot.addItem(self._bar_item)
         self._value_labels: List[pg.TextItem] = []

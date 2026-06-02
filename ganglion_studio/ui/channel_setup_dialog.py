@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import (
 
 from ganglion_studio.core import board_config as cfg
 from ganglion_studio.core.board_manager import BoardManager
+from ganglion_studio.ui import theme
 
 
 class ChannelSetupDialog(QDialog):
@@ -41,7 +42,7 @@ class ChannelSetupDialog(QDialog):
         hint = QLabel("Set the 10-20 placement, signal type and electrode for each channel. "
                       "The placement is used as the channel name.")
         hint.setWordWrap(True)
-        hint.setStyleSheet("color:#9aa0aa;")
+        hint.setStyleSheet(theme.MUTED_QSS)
         root.addWidget(hint)
 
         grid = QGridLayout()

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from typing import List, Optional
+from typing import List, Optional, Protocol, runtime_checkable
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
@@ -20,9 +20,11 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from ganglion_studio import palette
 from ganglion_studio.core.board_manager import BoardManager
 from ganglion_studio.core.dsp import FilterSettings
 from ganglion_studio.core.session import MarkerEvent, SessionConfig, SessionRecorder
+from ganglion_studio.ui import theme
 from ganglion_studio.ui.channel_setup_dialog import ChannelSetupDialog
 from ganglion_studio.ui.review_window import ReviewWindow
 from ganglion_studio.ui.widgets.band_power_widget import BandPowerWidget
@@ -34,6 +36,28 @@ from ganglion_studio.ui.widgets.psd_widget import PSDWidget
 from ganglion_studio.ui.widgets.spectrogram_widget import SpectrogramWidget
 from ganglion_studio.ui.widgets.stats_panel import StatsPanel
 from ganglion_studio.ui.widgets.time_series import TimeSeriesWidget
+
+
+@runtime_checkable
+class PlotTab(Protocol):
+    """Structural contract for the plot tabs hosted in the session view.
+
+    A plot tab is just a ``QWidget`` that can redraw itself on demand. Tabs do
+    NOT need to inherit this Protocol -- it documents the duck-typed interface
+    that :meth:`SessionView._tick` relies on (and enables an optional
+    ``isinstance`` check). See docs/EXTENDING.md for a walkthrough.
+
+    Required
+        update_plot(settings, active): redraw using the live display-filter
+        ``settings`` and the per-channel ``active`` flags.
+
+    Optional (accessed via getattr/hasattr, so safe to omit)
+        refresh_hz (float): cap on redraws per second; omit for "every tick".
+        set_channel_names(names): relabel traces when the montage changes.
+    """
+
+    def update_plot(self, settings: FilterSettings, active: List[bool]) -> None:
+        ...
 
 
 class SessionView(QWidget):
@@ -85,9 +109,9 @@ class SessionView(QWidget):
         mode = "DEMO" if self._config.demo else "GANGLION"
         tag = QLabel(mode)
         tag.setStyleSheet(
-            "background:#4f8ef7; color:#fff; border-radius:4px; padding:2px 6px; font-weight:600;"
+            f"background:{palette.ACCENT}; color:{palette.WHITE}; border-radius:4px; padding:2px 6px; font-weight:600;"
             if not self._config.demo else
-            "background:#e2c044; color:#15171c; border-radius:4px; padding:2px 6px; font-weight:600;"
+            f"background:{palette.OK}; color:#15171c; border-radius:4px; padding:2px 6px; font-weight:600;"
         )
         bar.addWidget(tag)
         bar.addStretch(1)
@@ -122,7 +146,7 @@ class SessionView(QWidget):
         bar.addWidget(self.refresh_spin)
 
         self.status_label = QLabel("")
-        self.status_label.setStyleSheet("color:#9aa0aa;")
+        self.status_label.setStyleSheet(theme.MUTED_QSS)
         bar.addWidget(self.status_label)
         return bar
 
@@ -150,6 +174,7 @@ class SessionView(QWidget):
         return scroll
 
     def _build_tabs(self) -> QTabWidget:
+        # Every widget added here satisfies the PlotTab protocol (top of file).
         self.tabs = QTabWidget()
         self.time_series = TimeSeriesWidget(self._manager)
         self.psd = PSDWidget(self._manager)
@@ -177,7 +202,7 @@ class SessionView(QWidget):
     def _tick(self) -> None:
         # Data acquisition happens on the background thread; here we only
         # render the visible tab, throttled to its own preferred rate.
-        current = self.tabs.currentWidget()
+        current: PlotTab = self.tabs.currentWidget()
         if hasattr(current, "update_plot") and self._due(current):
             current.update_plot(self._settings, self._active)
         if self._due(self.stats_panel):

@@ -103,7 +103,12 @@ def apply_filters(channel: np.ndarray, sampling_rate: int,
 
 def compute_psd(channel: np.ndarray, sampling_rate: int
                 ) -> Tuple[np.ndarray, np.ndarray]:
-    """Welch PSD via BrainFlow. Returns (freqs, amplitudes)."""
+    """Power spectral density via Welch's method (BrainFlow).
+
+    PSD = how much signal power sits at each frequency. Welch averages the
+    spectrum over overlapping windows for a smoother, more stable estimate.
+    Returns (freqs, amplitudes).
+    """
     data = _as_float(channel)
     if data.size < 16:
         return np.array([]), np.array([])
@@ -155,7 +160,11 @@ def compute_spectrogram(channel: np.ndarray, sampling_rate: int,
 
 def compute_band_powers(eeg: np.ndarray, sampling_rate: int
                         ) -> Tuple[List[str], np.ndarray]:
-    """Average band powers across channels. Returns (band_names, values)."""
+    """Average power in each EEG band (delta..gamma), across channels.
+
+    A compact summary of rhythm content -- how strong the slow vs. fast brain
+    rhythms are. Returns (band_names, values).
+    """
     names = [b[0] for b in EEG_BANDS]
     if eeg.ndim != 2 or eeg.shape[1] < sampling_rate:
         return names, np.zeros(len(EEG_BANDS))
@@ -184,6 +193,8 @@ def signal_quality(channel: np.ndarray, sampling_rate: int) -> dict:
     rms = float(np.sqrt(np.mean(np.square(data - np.mean(data)))))
     ptp = float(np.ptp(data))
     railed = is_railed(data)
+    # line_ratio: fraction of spectral magnitude sitting at mains hum (50/60 Hz).
+    # High values flag electrical interference or poor electrode contact.
     freqs, mag = compute_fft(channel, sampling_rate)
     line_ratio = 0.0
     if freqs.size:
