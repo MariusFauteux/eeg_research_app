@@ -1,5 +1,10 @@
 # Ganglion EEG Studio: recorded sessions
 recordings/
+# Raw BLE packet captures from native_raw_dump.py (debug artifacts, not code)
+native_raw_dump.txt
+
+# macOS Finder metadata
+.DS_Store
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

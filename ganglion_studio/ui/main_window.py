@@ -70,7 +70,9 @@ class MainWindow(QMainWindow):
         self.manager = BoardManager(
             demo=config.demo,
             mac_address=config.mac_address,
+            serial_port=config.serial_port,
             firmware=config.firmware,
+            use_custom_native=config.use_custom_native,
         )
         self._progress = QProgressDialog(
             "Connecting to the board..." if not config.demo else "Starting demo board...",

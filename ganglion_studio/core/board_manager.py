@@ -46,11 +46,19 @@ class BoardManager:
     demo: bool = False
     mac_address: str = ""
     serial_number: str = ""
+    serial_port: str = ""  # set -> connect via the BLED112 dongle, not native BLE
     firmware: str = "3"  # "3" (default), "2", or "auto"
+    # For native Bluetooth, use our own bleak driver instead of BrainFlow's
+    # native backend (BrainFlow's injects a once-per-second pulse). Ignored for
+    # demo and dongle modes. See core/native_ganglion.py.
+    use_custom_native: bool = True
     buffer_seconds: float = 30.0
 
     # --- runtime state (not constructor args) ---
-    board: Optional[BoardShim] = field(default=None, init=False)
+    # Either a BrainFlow BoardShim or a NativeGanglionClient -- both expose the
+    # same small method set this class uses (prepare_session, start_stream,
+    # stop_stream, get_board_data, config_board, insert_marker, release_session).
+    board: Optional[object] = field(default=None, init=False)
     board_id: int = field(default=0, init=False)
     sampling_rate: int = field(default=200, init=False)
     num_rows: int = field(default=0, init=False)
@@ -93,11 +101,15 @@ class BoardManager:
     def _resolve_board_id(self) -> int:
         if self.demo:
             return BoardIds.SYNTHETIC_BOARD.value
+        if self.serial_port:
+            return BoardIds.GANGLION_BOARD.value  # BLED112 dongle (serial port)
         return BoardIds.GANGLION_NATIVE_BOARD.value
 
     def _build_params(self) -> BrainFlowInputParams:
         params = BrainFlowInputParams()
         if not self.demo:
+            if self.serial_port:
+                params.serial_port = self.serial_port  # BLED112 dongle
             if self.mac_address:
                 params.mac_address = self.mac_address
             if self.serial_number:
@@ -131,14 +143,32 @@ class BoardManager:
         self.electrodes = list(electrodes)[:n]
         self.placements = list(placements)[:n]
 
+    def _use_custom_native(self) -> bool:
+        """True when we should use our own bleak driver (native BLE, not demo/dongle)."""
+        return self.use_custom_native and not self.demo and not self.serial_port
+
     def prepare(self) -> None:
         """Create the session and prepare the board. May block while BLE connects."""
         BoardShim.disable_board_logger()
         self.board_id = self._resolve_board_id()
+        # The descriptor (row layout, sampling rate) always comes from BrainFlow's
+        # static board map -- it needs no connection -- so every downstream reader
+        # sees the same layout regardless of which backend streams the data.
         self._load_descriptor()
-        params = self._build_params()
-        self.board = BoardShim(self.board_id, params)
-        self.board.prepare_session()
+        if self._use_custom_native():
+            from .native_ganglion import NativeGanglionClient
+            self.board = NativeGanglionClient(
+                address=self.mac_address,
+                num_rows=self.num_rows,
+                eeg_channels=self.eeg_channels,
+                timestamp_channel=self.timestamp_channel,
+                marker_channel=self.marker_channel,
+            )
+            self.board.prepare_session()
+        else:
+            params = self._build_params()
+            self.board = BoardShim(self.board_id, params)
+            self.board.prepare_session()
 
         self._buffer_len = max(1, int(self.buffer_seconds * self.sampling_rate))
         self._ring = np.zeros((self.num_rows, self._buffer_len), dtype=np.float64)
@@ -295,19 +325,27 @@ class BoardManager:
         return idx, row[idx]
 
     def latest_impedance_kohm(self) -> List[float]:
-        """Return latest impedance (kOhm) per EEG channel, or -1 if unknown."""
+        """Latest impedance (kOhm) per EEG channel, or -1.0 if not measured yet.
+
+        The Ganglion reports impedance on a slow per-channel cycle, so each
+        resistance row is mostly zeros between updates. We take the most recent
+        *non-zero* sample over a 2 s window -- averaging (as before) diluted the
+        value toward ~0. The /1000 assumes BrainFlow returns the resistance in
+        Ohms (confirm against a known resistor; see docs).
+        """
         if self.demo and self._demo_imp is not None:
             return [float(v) for v in self._demo_imp]
         result: List[float] = []
-        data = self.recent(0.5)
+        data = self.recent(2.0)
         for i, _ch in enumerate(self.eeg_channels):
+            val = -1.0
             if i < len(self.resistance_channels):
                 row = self.resistance_channels[i]
                 if data.shape[1] and row < data.shape[0]:
-                    val = float(np.mean(data[row, -min(data.shape[1], 25):]))
-                    result.append(val / 1000.0)
-                    continue
-            result.append(-1.0)
+                    nonzero = data[row][data[row] != 0.0]
+                    if nonzero.size:
+                        val = float(nonzero[-1]) / 1000.0
+            result.append(val)
         return result
 
     # ------------------------------------------------------------- commands
@@ -329,12 +367,20 @@ class BoardManager:
         self._safe_config(cmd)
 
     def start_impedance(self) -> None:
+        # The Ganglion LeadOff check only reports while the board is streaming,
+        # so auto-resume if the user had paused -- otherwise nothing happens.
+        if not self.streaming and self.board is not None:
+            self.start()
         self.impedance_mode = True
         self._safe_config(cfg.IMPEDANCE_START)
 
     def stop_impedance(self) -> None:
         self.impedance_mode = False
         self._safe_config(cfg.IMPEDANCE_STOP)
+
+    def is_disconnected(self) -> bool:
+        """True if a native-BLE link dropped mid-session (custom driver only)."""
+        return bool(getattr(self.board, "disconnected", False))
 
     def insert_marker(self, value: float) -> None:
         if self.board is not None and self.streaming:

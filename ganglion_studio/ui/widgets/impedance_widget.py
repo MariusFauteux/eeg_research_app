@@ -95,7 +95,7 @@ class ImpedanceWidget(QWidget):
         if checked:
             self._manager.start_impedance()
             self.toggle_btn.setText("Stop impedance test")
-            self.status.setText("Impedance test running...")
+            self.status.setText("Impedance test running (data stream active)...")
         else:
             self._manager.stop_impedance()
             self.toggle_btn.setText("Start impedance test")

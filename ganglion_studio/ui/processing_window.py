@@ -297,6 +297,9 @@ class ProcessingWindow(QWidget):
         self.scrollbar = QScrollBar(Qt.Orientation.Horizontal)
         self.scrollbar.valueChanged.connect(self._on_scroll)
         layout.addWidget(self.scrollbar)
+        # orig drives proc via the X-link; only manual zoom/pan updates the
+        # scrollbar (so our setXRange / autorange don't fight it).
+        self._orig_plot.getViewBox().sigRangeChangedManually.connect(self._on_plot_xrange)
         return container
 
     def _make_plot(self, title: str):
@@ -304,7 +307,7 @@ class ProcessingWindow(QWidget):
         plot = pw.getPlotItem()
         plot.showGrid(x=True, y=True, alpha=0.2)
         plot.setTitle(title)
-        plot.setMouseEnabled(x=False, y=False)
+        plot.setMouseEnabled(x=True, y=False)  # touchpad: scroll/pinch = zoom, drag = pan
         plot.setMenuEnabled(False)
         return pw, plot
 
@@ -520,6 +523,9 @@ class ProcessingWindow(QWidget):
             plot.setLabel("bottom", "Frequency" if psd else "Time", units="Hz" if psd else "s")
         self.scrollbar.setEnabled(not psd)
         self.amp_spin.setEnabled(not psd)
+        if psd:  # let PSD autorange freely; time-mode limits are reapplied on redraw
+            for plot in (self._orig_plot, self._proc_plot):
+                plot.getViewBox().setLimits(xMin=None, xMax=None)
         self._redraw_all()
 
     def _redraw_all(self, *_args) -> None:
@@ -582,6 +588,9 @@ class ProcessingWindow(QWidget):
         self.scrollbar.setMaximum(int(max(0.0, dur - window) * 1000))
         self.scrollbar.setPageStep(int(window * 1000))
         self.scrollbar.blockSignals(False)
+        if self.view_combo.currentText() != "PSD":
+            for plot in (self._orig_plot, self._proc_plot):
+                plot.getViewBox().setLimits(xMin=0.0, xMax=dur)
 
     def _on_scroll(self, *_args) -> None:
         self._on_view_changed()
@@ -593,3 +602,17 @@ class ProcessingWindow(QWidget):
         start = self.scrollbar.value() / 1000.0
         window = self.window_spin.value()
         self._orig_plot.setXRange(start, start + window, padding=0)  # linked -> proc
+
+    def _on_plot_xrange(self, *_args) -> None:
+        """A manual zoom/pan of the (time) view -> reflect it in the controls."""
+        if self._rec is None or self.view_combo.currentText() == "PSD":
+            return
+        x0, x1 = self._orig_plot.getViewBox().viewRange()[0]
+        window = max(0.05, x1 - x0)
+        self.window_spin.blockSignals(True)
+        self.window_spin.setValue(min(window, self.window_spin.maximum()))
+        self.window_spin.blockSignals(False)
+        self.scrollbar.blockSignals(True)
+        self._configure_scrollbar()
+        self.scrollbar.setValue(int(max(0.0, x0) * 1000))
+        self.scrollbar.blockSignals(False)

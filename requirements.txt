@@ -3,6 +3,7 @@ brainflow>=5.22
 PyQt6>=6.6
 pyqtgraph>=0.13
 bleak>=0.21
+pyserial>=3.5  # BLED112 dongle serial-port discovery (native BLE works without it)
 numpy>=1.24
 scipy>=1.10
 

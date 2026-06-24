@@ -26,6 +26,17 @@ FILTER_TYPES = {
     "Bessel": FilterTypes.BESSEL_ZERO_PHASE.value,
 }
 
+# Causal (forward-only) variants. The live time-series uses these: a zero-phase
+# filter runs the data forwards AND backwards, so a real transient (e.g. touching
+# an electrode) rings *before* and *after* it and bends both window edges. A
+# causal filter only responds after the event, like a true streaming filter --
+# the trade-off is a small phase delay, which is fine for a live display.
+CAUSAL_FILTER_TYPES = {
+    "Butterworth": FilterTypes.BUTTERWORTH.value,
+    "Chebyshev": FilterTypes.CHEBYSHEV_TYPE_1.value,
+    "Bessel": FilterTypes.BESSEL.value,
+}
+
 # Classic EEG frequency bands (Hz).
 EEG_BANDS = [
     ("Delta", 0.5, 4.0),
@@ -70,12 +81,23 @@ def _as_float(arr: np.ndarray) -> np.ndarray:
 
 
 def apply_filters(channel: np.ndarray, sampling_rate: int,
-                  settings: FilterSettings) -> np.ndarray:
-    """Return a filtered copy of a single-channel signal."""
+                  settings: FilterSettings, causal: bool = False) -> np.ndarray:
+    """Return a filtered copy of a single-channel signal.
+
+    ``causal=True`` uses forward-only filters (for the live display); the default
+    is zero-phase (for offline/analysis where phase fidelity matters).
+    """
     data = _as_float(channel)
     if data.size < _MIN_FILTER_SAMPLES:
         return data
-    ftype = FILTER_TYPES.get(settings.filter_type, FilterTypes.BUTTERWORTH_ZERO_PHASE.value)
+    # BrainFlow's filters are C routines: feeding them NaN/Inf can crash the whole
+    # process (a segfault no try/except can catch), so sanitize first.
+    if not np.all(np.isfinite(data)):
+        data = np.nan_to_num(data, nan=0.0, posinf=0.0, neginf=0.0)
+    type_map = CAUSAL_FILTER_TYPES if causal else FILTER_TYPES
+    default = (FilterTypes.BUTTERWORTH.value if causal
+              else FilterTypes.BUTTERWORTH_ZERO_PHASE.value)
+    ftype = type_map.get(settings.filter_type, default)
     nyq = sampling_rate / 2.0
     try:
         if settings.detrend:
@@ -99,6 +121,32 @@ def apply_filters(channel: np.ndarray, sampling_rate: int,
         # fall back to the unfiltered copy rather than crashing the UI.
         return _as_float(channel)
     return data
+
+
+# Seconds of extra history fed to the filter as warm-up before the visible
+# window. Zero-phase IIR filters ring at both edges of whatever they are given;
+# giving them real past context (and reflecting the "now" edge) pushes those
+# transients outside the part we actually show.
+FILTER_WARMUP_SEC = 2.0
+
+
+def apply_filters_windowed(channel: np.ndarray, sampling_rate: int,
+                           settings: FilterSettings, visible: int) -> np.ndarray:
+    """Filter ``channel`` but return only its last ``visible`` samples, clean.
+
+    ``channel`` should include extra past samples before the visible window. The
+    filter "warms up" over that history, so its left-edge transient lands in the
+    discarded warm-up region instead of bending the start of the visible window
+    (the artifact you get from filtering each short window in isolation). The
+    right edge is "now" -- there is no future data, and the zero-phase filter's
+    own internal padding already handles it well, so we leave it untouched.
+    """
+    data = _as_float(channel)
+    visible = max(0, min(visible, data.size))
+    if visible == 0:
+        return data[:0]
+    filtered = apply_filters(data, sampling_rate, settings, causal=True)
+    return filtered[-visible:]
 
 
 def compute_psd(channel: np.ndarray, sampling_rate: int

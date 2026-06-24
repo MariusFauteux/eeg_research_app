@@ -37,7 +37,11 @@ class BleDevice:
 
     @property
     def is_ganglion(self) -> bool:
-        return "ganglion" in (self.name or "").lower()
+        # The Ganglion advertises under its BLE radio-module name "Simblee" on
+        # many firmwares, not "Ganglion" -- match both so it is not filtered out
+        # of the "Ganglion only" list (and still auto-highlights).
+        name_l = (self.name or "").lower()
+        return "ganglion" in name_l or "simblee" in name_l
 
 
 # --------------------------------------------------------------------------- #

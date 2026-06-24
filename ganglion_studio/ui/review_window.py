@@ -129,8 +129,10 @@ class ReviewWindow(QMainWindow):
         self._plot = self._plot_widget.getPlotItem()
         self._plot.showGrid(x=True, y=True, alpha=0.2)
         self._plot.setLabel("bottom", "Time", units="s")
-        self._plot.setMouseEnabled(x=False, y=False)
+        self._plot.setMouseEnabled(x=True, y=False)  # touchpad: scroll/pinch = zoom, drag = pan
         self._plot.setMenuEnabled(False)
+        if self._duration > 0:
+            self._plot.setLimits(xMin=0.0, xMax=self._duration)
         self._curves: List[pg.PlotDataItem] = []
         for i in range(self._n):
             color = cfg.CHANNEL_COLORS[i % len(cfg.CHANNEL_COLORS)]
@@ -145,6 +147,9 @@ class ReviewWindow(QMainWindow):
         self.scrollbar.valueChanged.connect(self._on_view_changed)
         col.addWidget(self.scrollbar)
         self._configure_scrollbar()
+        # Only manual (mouse/trackpad) zoom/pan updates the scrollbar, so our own
+        # programmatic setXRange and pyqtgraph autorange don't fight it.
+        self._plot.getViewBox().sigRangeChangedManually.connect(self._on_plot_xrange)
         return col
 
     def _build_marker_panel(self) -> QWidget:
@@ -200,6 +205,18 @@ class ReviewWindow(QMainWindow):
         start = self.scrollbar.value() / 1000.0
         window = self.window_spin.value()
         self._plot.setXRange(start, start + window, padding=0)
+
+    def _on_plot_xrange(self, *_args) -> None:
+        """A manual zoom/pan changed the view -> reflect it in the controls."""
+        x0, x1 = self._plot.getViewBox().viewRange()[0]
+        window = max(0.05, x1 - x0)
+        self.window_spin.blockSignals(True)
+        self.window_spin.setValue(min(window, self.window_spin.maximum()))
+        self.window_spin.blockSignals(False)
+        self.scrollbar.blockSignals(True)
+        self._configure_scrollbar()
+        self.scrollbar.setValue(int(max(0.0, x0) * 1000))
+        self.scrollbar.blockSignals(False)
 
     def _redraw(self, *_args) -> None:
         if self._total == 0:

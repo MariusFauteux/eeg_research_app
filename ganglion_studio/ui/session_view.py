@@ -72,6 +72,7 @@ class SessionView(QWidget):
         self._active: List[bool] = list(manager.channel_active)
         self._recorder: Optional[SessionRecorder] = None
         self._reviews: List[ReviewWindow] = []  # keep refs so windows aren't GC'd
+        self._disconnect_handled = False  # one-shot guard for the BLE-drop notice
 
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
@@ -200,6 +201,17 @@ class SessionView(QWidget):
         self._timer.start(max(16, int(1000 / hz)))
 
     def _tick(self) -> None:
+        # A native-BLE link can drop mid-session (e.g. electrical disturbance);
+        # tell the user clearly instead of leaving a silently-frozen trace.
+        if self._manager.is_disconnected() and not self._disconnect_handled:
+            self._disconnect_handled = True
+            self.status_label.setText("Bluetooth disconnected")
+            QMessageBox.warning(
+                self, "Bluetooth disconnected",
+                "The Ganglion link dropped. Return to the Dashboard and start a "
+                "new session to reconnect.",
+            )
+            return
         # Data acquisition happens on the background thread; here we only
         # render the visible tab, throttled to its own preferred rate.
         current: PlotTab = self.tabs.currentWidget()
@@ -261,6 +273,8 @@ class SessionView(QWidget):
         else:
             self._manager.start()
             self.pause_btn.setText("Pause stream")
+        # Scrolling/zooming the time-series view is only enabled while paused.
+        self.time_series.set_paused(paused)
 
     def _on_record(self, recording: bool) -> None:
         if recording:

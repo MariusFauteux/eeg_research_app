@@ -29,8 +29,12 @@ class SessionConfig:
     demo: bool = False
     mac_address: str = ""
     serial_number: str = ""
+    serial_port: str = ""  # set -> connect via the BLED112 dongle
     firmware: str = "3"
     notch_freq: int = 50
+    # Native BLE only: use the custom bleak driver (True) vs BrainFlow's native
+    # backend (False). Ignored for demo/dongle. See core/native_ganglion.py.
+    use_custom_native: bool = True
 
     def safe_name(self) -> str:
         keep = "-_ "
