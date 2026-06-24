@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -22,9 +23,11 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from ganglion_studio.core import ble_scanner
+from ganglion_studio import palette
+from ganglion_studio.core import ble_scanner, saved_devices
 from ganglion_studio.core.ble_scanner import BleDevice, BleUnavailable
 from ganglion_studio.core.session import SessionConfig
+from ganglion_studio.ui import theme
 
 
 class ScanWorker(QThread):
@@ -50,6 +53,7 @@ class Dashboard(QWidget):
     """Connection / session-setup screen."""
 
     start_session = pyqtSignal(object)  # emits SessionConfig
+    open_processing = pyqtSignal()  # request to open the Processing Lab
 
     def __init__(self) -> None:
         super().__init__()
@@ -63,11 +67,20 @@ class Dashboard(QWidget):
         root.setSpacing(16)
 
         title = QLabel("Ganglion EEG Studio")
-        title.setStyleSheet("font-size: 26px; font-weight: 700; color: #4f8ef7;")
+        title.setStyleSheet(f"font-size: 26px; font-weight: 700; color: {palette.ACCENT};")
         subtitle = QLabel("Connect to your OpenBCI Ganglion over native Bluetooth")
-        subtitle.setStyleSheet("color: #9aa0aa;")
-        root.addWidget(title)
-        root.addWidget(subtitle)
+        subtitle.setStyleSheet(theme.MUTED_QSS)
+        header = QHBoxLayout()
+        header_text = QVBoxLayout()
+        header_text.addWidget(title)
+        header_text.addWidget(subtitle)
+        header.addLayout(header_text)
+        header.addStretch(1)
+        self.processing_btn = QPushButton("Processing Lab")
+        self.processing_btn.setToolTip("Open the offline processing playground (no board needed)")
+        self.processing_btn.clicked.connect(self.open_processing.emit)
+        header.addWidget(self.processing_btn, alignment=Qt.AlignmentFlag.AlignTop)
+        root.addLayout(header)
 
         body = QHBoxLayout()
         body.setSpacing(20)
@@ -76,6 +89,24 @@ class Dashboard(QWidget):
         # --- Device discovery -------------------------------------------
         scan_box = QGroupBox("1. Find your board")
         scan_layout = QVBoxLayout(scan_box)
+
+        # Saved devices: reconnect without scanning every time.
+        saved_row = QHBoxLayout()
+        saved_row.addWidget(QLabel("Saved"))
+        self.saved_combo = QComboBox()
+        self.saved_combo.setToolTip("Pick a saved board to skip scanning")
+        self.saved_combo.currentIndexChanged.connect(self._on_saved_selected)
+        saved_row.addWidget(self.saved_combo, 1)
+        self.save_btn = QPushButton("Save")
+        self.save_btn.setToolTip("Save the selected (or entered) device for one-click reconnect")
+        self.save_btn.clicked.connect(self._save_current_device)
+        self.remove_btn = QPushButton("Remove")
+        self.remove_btn.setToolTip("Remove the selected saved device")
+        self.remove_btn.clicked.connect(self._remove_saved_device)
+        saved_row.addWidget(self.save_btn)
+        saved_row.addWidget(self.remove_btn)
+        scan_layout.addLayout(saved_row)
+
         scan_controls = QHBoxLayout()
         self.scan_btn = QPushButton("Scan Bluetooth")
         self.scan_btn.clicked.connect(self._start_scan)
@@ -91,8 +122,9 @@ class Dashboard(QWidget):
         scan_layout.addWidget(self.device_list, 1)
 
         self.scan_status = QLabel("Idle. Click Scan, or use Demo mode.")
-        self.scan_status.setStyleSheet("color: #9aa0aa;")
+        self.scan_status.setStyleSheet(theme.MUTED_QSS)
         scan_layout.addWidget(self.scan_status)
+        self.scan_box = scan_box
         body.addWidget(scan_box, 2)
 
         # --- Session setup ----------------------------------------------
@@ -103,9 +135,37 @@ class Dashboard(QWidget):
         self.name_edit.textChanged.connect(self._update_start_enabled)
         form.addRow("Session name", self.name_edit)
 
+        self.conn_combo = QComboBox()
+        # "Custom" = our bleak driver (no once-per-second pulse); "BrainFlow" =
+        # the stock native backend, kept for comparison/fallback.
+        self.conn_combo.addItems(
+            ["Native Bluetooth (Custom)", "Native Bluetooth (BrainFlow)", "Dongle (BLED112)"]
+        )
+        self.conn_combo.setToolTip(
+            "Custom: bypasses BrainFlow's native BLE to avoid the 1 Hz pulse.\n"
+            "BrainFlow: stock native backend (for A/B comparison).\n"
+            "Dongle: OpenBCI BLED112 USB dongle."
+        )
+        self.conn_combo.currentTextChanged.connect(self._update_connection_ui)
+        form.addRow("Connection", self.conn_combo)
+
         self.mac_edit = QLineEdit()
         self.mac_edit.setPlaceholderText("auto-discover (optional)")
         form.addRow("MAC / address", self.mac_edit)
+
+        # Dongle serial-port picker (hidden unless Connection = Dongle).
+        port_row = QHBoxLayout()
+        self.port_combo = QComboBox()
+        self.port_combo.currentIndexChanged.connect(self._update_start_enabled)
+        self.refresh_ports_btn = QPushButton("Refresh")
+        self.refresh_ports_btn.clicked.connect(self._refresh_ports)
+        port_row.addWidget(self.port_combo, 1)
+        port_row.addWidget(self.refresh_ports_btn)
+        self._port_row = QWidget()
+        self._port_row.setLayout(port_row)
+        self._form = form
+        form.addRow("Dongle port", self._port_row)
+        form.setRowVisible(self._port_row, False)
 
         self.fw_combo = QComboBox()
         self.fw_combo.addItems(["3 (default)", "2 (legacy)", "auto"])
@@ -128,6 +188,65 @@ class Dashboard(QWidget):
         self.start_btn.setEnabled(False)
         form.addRow(self.start_btn)
         body.addWidget(setup_box, 1)
+
+        self._refresh_saved()
+
+    # --------------------------------------------------------- saved devices
+    def _refresh_saved(self, select_address: Optional[str] = None) -> None:
+        """Reload the saved-device dropdown from disk."""
+        self.saved_combo.blockSignals(True)
+        self.saved_combo.clear()
+        self.saved_combo.addItem("— saved devices —", None)
+        for dev in saved_devices.load():
+            self.saved_combo.addItem(f"{dev.name}  ({dev.address})", dev.address)
+        self.saved_combo.blockSignals(False)
+        if select_address:
+            idx = self.saved_combo.findData(select_address)
+            if idx > 0:
+                self.saved_combo.setCurrentIndex(idx)  # fires _on_saved_selected
+        self.remove_btn.setEnabled(bool(self.saved_combo.currentData()))
+
+    def _on_saved_selected(self, _idx: int = 0) -> None:
+        address = self.saved_combo.currentData()
+        self.remove_btn.setEnabled(bool(address))
+        if not address:
+            return
+        # Saved devices are native BLE; make sure we're not in dongle mode.
+        if self.conn_combo.currentText().startswith("Dongle"):
+            self.conn_combo.setCurrentIndex(0)
+        self.mac_edit.setText(address)
+        label = self.saved_combo.currentText().split("  (")[0]
+        if not self.name_edit.text():
+            self.name_edit.setText(label.replace(" ", "_"))
+        self.scan_status.setText(f"Using saved device '{label}'. Click Start Session.")
+        self._update_start_enabled()
+
+    def _save_current_device(self) -> None:
+        address = self.mac_edit.text().strip()
+        if not address:
+            QMessageBox.information(
+                self, "Save device",
+                "Select a scanned device (or type an address) first.",
+            )
+            return
+        default = ""
+        items = self.device_list.selectedItems()
+        if items:
+            default = items[0].data(Qt.ItemDataRole.UserRole).name
+        default = default or self.name_edit.text().strip() or "Ganglion"
+        label, ok = QInputDialog.getText(self, "Save device", "Label:", text=default)
+        if not ok:
+            return
+        saved_devices.add(label, address)
+        self._refresh_saved(select_address=address)
+        self.scan_status.setText(f"Saved '{label.strip() or address}'.")
+
+    def _remove_saved_device(self) -> None:
+        address = self.saved_combo.currentData()
+        if not address:
+            return
+        saved_devices.remove(address)
+        self._refresh_saved()
 
     # ------------------------------------------------------------- scanning
     def _start_scan(self) -> None:
@@ -174,27 +293,66 @@ class Dashboard(QWidget):
 
     # ------------------------------------------------------------- session
     def _on_demo_toggled(self, checked: bool) -> None:
-        self.scan_btn.setEnabled(not checked)
-        self.device_list.setEnabled(not checked)
-        self.mac_edit.setEnabled(not checked)
-        self.fw_combo.setEnabled(not checked)
         if checked and not self.name_edit.text():
             self.name_edit.setText("demo-session")
+        self._update_connection_ui()
+
+    def _update_connection_ui(self, *_args) -> None:
+        """Enable only the controls relevant to the chosen connection mode."""
+        demo = self.demo_check.isChecked()
+        dongle = self.conn_combo.currentText().startswith("Dongle")
+        native_live = (not demo) and (not dongle)
+        # The host BLE scan + MAC are native-only. The dongle does its OWN
+        # discovery, and on macOS the scan returns a CoreBluetooth UUID (not a
+        # real MAC) that the dongle cannot connect to -- so scanning is disabled
+        # in dongle mode to avoid a doomed connection attempt.
+        self.scan_box.setEnabled(native_live)
+        self.mac_edit.setEnabled(native_live)
+        self.fw_combo.setEnabled(not demo)  # firmware applies to the dongle too
+        self._form.setRowVisible(self._port_row, dongle and not demo)
+        if dongle and not demo:
+            if self.port_combo.count() == 0:
+                self._refresh_ports()
+            self.scan_status.setText(
+                "Dongle mode: pick the OpenBCI BLED112 port at right (a 'usbserial' "
+                "/ Silicon Labs CP210x device). No scan needed - it finds the board."
+            )
+        elif native_live:
+            self.scan_status.setText("Idle. Click Scan, or use Demo mode.")
+        self._update_start_enabled()
+
+    def _refresh_ports(self) -> None:
+        from ganglion_studio.core.serial_ports import list_serial_ports
+        self.port_combo.clear()
+        for device, desc in list_serial_ports():
+            self.port_combo.addItem(f"{device}  ({desc})", device)
+        if self.port_combo.count() == 0:
+            self.port_combo.addItem("No serial ports found", "")
         self._update_start_enabled()
 
     def _update_start_enabled(self) -> None:
         has_name = bool(self.name_edit.text().strip())
-        ready = self.demo_check.isChecked() or bool(self.device_list.selectedItems()) or bool(self.mac_edit.text().strip())
+        if self.demo_check.isChecked():
+            ready = True
+        elif self.conn_combo.currentText().startswith("Dongle"):
+            ready = bool(self.port_combo.currentData())
+        else:
+            ready = bool(self.device_list.selectedItems()) or bool(self.mac_edit.text().strip())
         self.start_btn.setEnabled(has_name and ready)
 
     def _on_start(self) -> None:
         fw = self.fw_combo.currentText().split()[0]
         notch = 50 if self.notch_combo.currentIndex() == 0 else 60
+        dongle = self.conn_combo.currentText().startswith("Dongle")
         config = SessionConfig(
             name=self.name_edit.text().strip(),
             demo=self.demo_check.isChecked(),
-            mac_address=self.mac_edit.text().strip(),
+            # The dongle auto-discovers its board; never pass the host scan's
+            # macOS UUID as a MAC (the dongle can't connect to it).
+            mac_address="" if dongle else self.mac_edit.text().strip(),
+            serial_port=(self.port_combo.currentData() or "") if dongle else "",
             firmware=fw,
             notch_freq=notch,
+            use_custom_native=self.conn_combo.currentText().endswith("(Custom)"),
         )
         self.start_session.emit(config)

@@ -26,6 +26,17 @@ FILTER_TYPES = {
     "Bessel": FilterTypes.BESSEL_ZERO_PHASE.value,
 }
 
+# Causal (forward-only) variants. The live time-series uses these: a zero-phase
+# filter runs the data forwards AND backwards, so a real transient (e.g. touching
+# an electrode) rings *before* and *after* it and bends both window edges. A
+# causal filter only responds after the event, like a true streaming filter --
+# the trade-off is a small phase delay, which is fine for a live display.
+CAUSAL_FILTER_TYPES = {
+    "Butterworth": FilterTypes.BUTTERWORTH.value,
+    "Chebyshev": FilterTypes.CHEBYSHEV_TYPE_1.value,
+    "Bessel": FilterTypes.BESSEL.value,
+}
+
 # Classic EEG frequency bands (Hz).
 EEG_BANDS = [
     ("Delta", 0.5, 4.0),
@@ -36,6 +47,15 @@ EEG_BANDS = [
 ]
 
 _MIN_FILTER_SAMPLES = 32
+
+# OpenBCI Ganglion full-scale input range (MCP3912 ADC, Vref 1.2 V, gain 51):
+#   scale      = 1.2 / ((2**23 - 1) * 1.5 * 51) * 1e6  ~= 1.87e-3 uV/count
+#   full-scale = scale * (2**23 - 1) = 1.2e6 / (1.5 * 51)  ~= 15686 uV
+# (Note: +/- 187500 uV is the *Cyton's* range -- 4.5 V / gain 24 -- not the
+# Ganglion. BrainFlow already returns Ganglion data in uV.)
+GANGLION_FULLSCALE_UV = 15686.0
+# Fraction of full-scale above which a channel is treated as railed/clipped.
+_RAIL_FRACTION = 0.95
 
 
 @dataclass
@@ -61,12 +81,23 @@ def _as_float(arr: np.ndarray) -> np.ndarray:
 
 
 def apply_filters(channel: np.ndarray, sampling_rate: int,
-                  settings: FilterSettings) -> np.ndarray:
-    """Return a filtered copy of a single-channel signal."""
+                  settings: FilterSettings, causal: bool = False) -> np.ndarray:
+    """Return a filtered copy of a single-channel signal.
+
+    ``causal=True`` uses forward-only filters (for the live display); the default
+    is zero-phase (for offline/analysis where phase fidelity matters).
+    """
     data = _as_float(channel)
     if data.size < _MIN_FILTER_SAMPLES:
         return data
-    ftype = FILTER_TYPES.get(settings.filter_type, FilterTypes.BUTTERWORTH_ZERO_PHASE.value)
+    # BrainFlow's filters are C routines: feeding them NaN/Inf can crash the whole
+    # process (a segfault no try/except can catch), so sanitize first.
+    if not np.all(np.isfinite(data)):
+        data = np.nan_to_num(data, nan=0.0, posinf=0.0, neginf=0.0)
+    type_map = CAUSAL_FILTER_TYPES if causal else FILTER_TYPES
+    default = (FilterTypes.BUTTERWORTH.value if causal
+              else FilterTypes.BUTTERWORTH_ZERO_PHASE.value)
+    ftype = type_map.get(settings.filter_type, default)
     nyq = sampling_rate / 2.0
     try:
         if settings.detrend:
@@ -92,9 +123,40 @@ def apply_filters(channel: np.ndarray, sampling_rate: int,
     return data
 
 
+# Seconds of extra history fed to the filter as warm-up before the visible
+# window. Zero-phase IIR filters ring at both edges of whatever they are given;
+# giving them real past context (and reflecting the "now" edge) pushes those
+# transients outside the part we actually show.
+FILTER_WARMUP_SEC = 2.0
+
+
+def apply_filters_windowed(channel: np.ndarray, sampling_rate: int,
+                           settings: FilterSettings, visible: int) -> np.ndarray:
+    """Filter ``channel`` but return only its last ``visible`` samples, clean.
+
+    ``channel`` should include extra past samples before the visible window. The
+    filter "warms up" over that history, so its left-edge transient lands in the
+    discarded warm-up region instead of bending the start of the visible window
+    (the artifact you get from filtering each short window in isolation). The
+    right edge is "now" -- there is no future data, and the zero-phase filter's
+    own internal padding already handles it well, so we leave it untouched.
+    """
+    data = _as_float(channel)
+    visible = max(0, min(visible, data.size))
+    if visible == 0:
+        return data[:0]
+    filtered = apply_filters(data, sampling_rate, settings, causal=True)
+    return filtered[-visible:]
+
+
 def compute_psd(channel: np.ndarray, sampling_rate: int
                 ) -> Tuple[np.ndarray, np.ndarray]:
-    """Welch PSD via BrainFlow. Returns (freqs, amplitudes)."""
+    """Power spectral density via Welch's method (BrainFlow).
+
+    PSD = how much signal power sits at each frequency. Welch averages the
+    spectrum over overlapping windows for a smoother, more stable estimate.
+    Returns (freqs, amplitudes).
+    """
     data = _as_float(channel)
     if data.size < 16:
         return np.array([]), np.array([])
@@ -146,7 +208,11 @@ def compute_spectrogram(channel: np.ndarray, sampling_rate: int,
 
 def compute_band_powers(eeg: np.ndarray, sampling_rate: int
                         ) -> Tuple[List[str], np.ndarray]:
-    """Average band powers across channels. Returns (band_names, values)."""
+    """Average power in each EEG band (delta..gamma), across channels.
+
+    A compact summary of rhythm content -- how strong the slow vs. fast brain
+    rhythms are. Returns (band_names, values).
+    """
     names = [b[0] for b in EEG_BANDS]
     if eeg.ndim != 2 or eeg.shape[1] < sampling_rate:
         return names, np.zeros(len(EEG_BANDS))
@@ -159,6 +225,14 @@ def compute_band_powers(eeg: np.ndarray, sampling_rate: int
         return names, np.zeros(len(EEG_BANDS))
 
 
+def is_railed(channel: np.ndarray) -> bool:
+    """True if the signal pins near the Ganglion ADC full-scale (clipping)."""
+    data = _as_float(channel)
+    if data.size == 0:
+        return False
+    return bool(np.max(np.abs(data)) > _RAIL_FRACTION * GANGLION_FULLSCALE_UV)
+
+
 def signal_quality(channel: np.ndarray, sampling_rate: int) -> dict:
     """Lightweight per-channel quality metrics for electrode characterization."""
     data = _as_float(channel)
@@ -166,8 +240,9 @@ def signal_quality(channel: np.ndarray, sampling_rate: int) -> dict:
         return {"rms": 0.0, "ptp": 0.0, "railed": False, "line_ratio": 0.0}
     rms = float(np.sqrt(np.mean(np.square(data - np.mean(data)))))
     ptp = float(np.ptp(data))
-    # Railed if amplitude pins near the Ganglion full-scale (~ +/- 187500 uV).
-    railed = bool(np.max(np.abs(data)) > 180000.0)
+    railed = is_railed(data)
+    # line_ratio: fraction of spectral magnitude sitting at mains hum (50/60 Hz).
+    # High values flag electrical interference or poor electrode contact.
     freqs, mag = compute_fft(channel, sampling_rate)
     line_ratio = 0.0
     if freqs.size:
@@ -176,3 +251,40 @@ def signal_quality(channel: np.ndarray, sampling_rate: int) -> dict:
             band = (freqs > f0 - 2) & (freqs < f0 + 2)
             line_ratio = max(line_ratio, float(np.sum(mag[band]) / total))
     return {"rms": rms, "ptp": ptp, "railed": railed, "line_ratio": line_ratio}
+
+
+def dominant_frequency(channel: np.ndarray, sampling_rate: int,
+                       fmin: float = 1.0, fmax: float = 70.0) -> float:
+    """Frequency (Hz) of the strongest spectral component in [fmin, fmax]."""
+    freqs, mag = compute_fft(channel, sampling_rate)
+    if freqs.size == 0:
+        return 0.0
+    band = (freqs >= fmin) & (freqs <= fmax)
+    if not np.any(band):
+        return 0.0
+    sub_freqs = freqs[band]
+    sub_mag = mag[band]
+    return float(sub_freqs[int(np.argmax(sub_mag))])
+
+
+def quality_label(stats: dict) -> str:
+    """Map raw metrics to a contact-quality label: good / ok / bad."""
+    if stats.get("railed"):
+        return "bad"
+    ptp = stats.get("ptp", 0.0)
+    line = stats.get("line_ratio", 0.0)
+    if ptp > 1000.0 or line > 0.5:
+        return "bad"
+    if ptp > 200.0 or line > 0.25:
+        return "ok"
+    return "good"
+
+
+def channel_stats(channel: np.ndarray, sampling_rate: int) -> dict:
+    """Rich per-channel statistics for the live stats panel."""
+    data = _as_float(channel)
+    base = signal_quality(data, sampling_rate)
+    std = float(np.std(data)) if data.size else 0.0
+    dom = dominant_frequency(data, sampling_rate) if data.size else 0.0
+    base.update({"std": std, "dominant_hz": dom, "quality": quality_label(base)})
+    return base

@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from ganglion_studio import palette
 from ganglion_studio.core import board_config as cfg
 from ganglion_studio.core.board_manager import BoardManager
 from ganglion_studio.core.dsp import (
@@ -26,10 +27,15 @@ from ganglion_studio.core.dsp import (
 
 
 class SpectrogramWidget(QWidget):
+    # Rolling spectrogram + FFT is the heaviest tab; a few fps is plenty.
+    refresh_hz = 4.0
+
     def __init__(self, manager: BoardManager) -> None:
         super().__init__()
         self._manager = manager
         self._n = len(manager.eeg_channels)
+        self._levels = None
+        self._level_frames = 0
 
         root = QVBoxLayout(self)
         root.addLayout(self._build_controls())
@@ -49,14 +55,18 @@ class SpectrogramWidget(QWidget):
         self._fft_plot.setLabel("left", "Magnitude", units="uV")
         self._fft_plot.setLabel("bottom", "Frequency", units="Hz")
         self._fft_plot.showGrid(x=True, y=True, alpha=0.2)
-        self._fft_curve = self._fft_plot.plot(pen=pg.mkPen("#4f8ef7", width=1.5))
+        self._fft_curve = self._fft_plot.plot(pen=pg.mkPen(palette.ACCENT, width=1.5))
+
+    def set_channel_names(self, names: List[str]) -> None:
+        for i in range(min(self.ch_combo.count(), len(names))):
+            self.ch_combo.setItemText(i, names[i])
 
     def _build_controls(self) -> QHBoxLayout:
         bar = QHBoxLayout()
         bar.addWidget(QLabel("Channel"))
         self.ch_combo = QComboBox()
         for i in range(self._n):
-            self.ch_combo.addItem(cfg.DEFAULT_CHANNEL_NAMES[i])
+            self.ch_combo.addItem(self._manager.channel_names[i])
         bar.addWidget(self.ch_combo)
 
         bar.addWidget(QLabel("Window"))
@@ -91,7 +101,12 @@ class SpectrogramWidget(QWidget):
         if sxx.size:
             fmask = freqs <= fmax
             img = sxx[fmask, :].T  # time x freq
-            self._img.setImage(img, autoLevels=True)
+            # Recompute colour levels only occasionally - a full min/max scan
+            # plus LUT rebuild (autoLevels) every frame is the main cost here.
+            if self._levels is None or self._level_frames % 16 == 0:
+                self._levels = (float(img.min()), float(img.max()))
+            self._level_frames += 1
+            self._img.setImage(img, autoLevels=False, levels=self._levels)
             f_sel = freqs[fmask]
             if times.size and f_sel.size:
                 self._img.setRect(pg.QtCore.QRectF(0, 0, float(times[-1]), float(f_sel[-1])))

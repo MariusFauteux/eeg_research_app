@@ -28,12 +28,15 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from ganglion_studio import palette
+from ganglion_studio.ui import theme
+
 DEFAULT_MARKERS = [
-    ("Eyes Open", 1, "#5fd38d"),
-    ("Eyes Closed", 2, "#4f8ef7"),
-    ("Stimulus", 3, "#e2c044"),
-    ("Movement", 4, "#f7766f"),
-    ("Rest", 5, "#9aa0aa"),
+    ("Eyes Open", 1, palette.GOOD),
+    ("Eyes Closed", 2, palette.ACCENT),
+    ("Stimulus", 3, palette.OK),
+    ("Movement", 4, palette.BAD),
+    ("Rest", 5, palette.MUTED),
 ]
 
 
@@ -55,7 +58,7 @@ class MarkerPanel(QGroupBox):
 
         root = QVBoxLayout(self)
         hint = QLabel("Click or press the number key to drop a marker.")
-        hint.setStyleSheet("color:#9aa0aa;")
+        hint.setStyleSheet(theme.MUTED_QSS)
         root.addWidget(hint)
 
         self._buttons_box = QVBoxLayout()
@@ -113,8 +116,8 @@ class MarkerPanel(QGroupBox):
         code, ok = QInputDialog.getInt(self, "Add marker type", "Numeric code:", len(self._types) + 1, 1, 999)
         if not ok:
             return
-        palette = ["#5fd38d", "#4f8ef7", "#e2c044", "#f7766f", "#b48ef7", "#f79edb"]
-        color = palette[len(self._types) % len(palette)]
+        cycle = palette.MARKER_PALETTE
+        color = cycle[len(self._types) % len(cycle)]
         self._types.append(MarkerType(label.strip(), code, color))
         self._rebuild_buttons()
 

@@ -21,6 +21,9 @@ from ganglion_studio.core.dsp import FilterSettings, apply_filters, compute_psd
 
 
 class PSDWidget(QWidget):
+    # Spectral estimate is expensive and slow-moving; no need for 30 fps.
+    refresh_hz = 5.0
+
     def __init__(self, manager: BoardManager) -> None:
         super().__init__()
         self._manager = manager
@@ -33,16 +36,22 @@ class PSDWidget(QWidget):
         self._plot.showGrid(x=True, y=True, alpha=0.2)
         self._plot.setLabel("bottom", "Frequency", units="Hz")
         self._plot.setLabel("left", "PSD", units="uV^2/Hz")
-        self._plot.addLegend()
+        self._legend = self._plot.addLegend()
         root.addWidget(self._plot, 1)
 
         self._curves: List[pg.PlotDataItem] = []
         for i in range(self._n):
             color = cfg.CHANNEL_COLORS[i % len(cfg.CHANNEL_COLORS)]
             self._curves.append(
-                self._plot.plot(pen=pg.mkPen(color, width=1.5), name=cfg.DEFAULT_CHANNEL_NAMES[i])
+                self._plot.plot(pen=pg.mkPen(color, width=1.5), name=self._manager.channel_names[i])
             )
         self._apply_log()
+
+    def set_channel_names(self, names: List[str]) -> None:
+        for i, curve in enumerate(self._curves):
+            if i < len(names):
+                self._legend.removeItem(curve)
+                self._legend.addItem(curve, names[i])
 
     def _build_controls(self) -> QHBoxLayout:
         bar = QHBoxLayout()

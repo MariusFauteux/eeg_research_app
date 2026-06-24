@@ -15,12 +15,17 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from ganglion_studio import palette
 from ganglion_studio.core import board_config as cfg
 from ganglion_studio.core.board_manager import BoardManager
 from ganglion_studio.core.dsp import FilterSettings
+from ganglion_studio.ui import theme
 
 
 class ImpedanceWidget(QWidget):
+    # Impedance changes slowly; refreshing a few times per second is plenty.
+    refresh_hz = 8.0
+
     def __init__(self, manager: BoardManager) -> None:
         super().__init__()
         self._manager = manager
@@ -36,7 +41,7 @@ class ImpedanceWidget(QWidget):
         self.toggle_btn.toggled.connect(self._on_toggle)
         bar.addWidget(self.toggle_btn)
         self.status = QLabel("Impedance test off. EEG streaming continues.")
-        self.status.setStyleSheet("color:#9aa0aa;")
+        self.status.setStyleSheet(theme.MUTED_QSS)
         bar.addWidget(self.status)
         bar.addStretch(1)
         root.addLayout(bar)
@@ -45,7 +50,7 @@ class ImpedanceWidget(QWidget):
             f"Good < {cfg.IMPEDANCE_GOOD_KOHM:.0f} k\u03A9   "
             f"OK < {cfg.IMPEDANCE_OK_KOHM:.0f} k\u03A9   Bad above"
         )
-        legend.setStyleSheet("color:#9aa0aa;")
+        legend.setStyleSheet(theme.MUTED_QSS)
         root.addWidget(legend)
 
         glw = pg.GraphicsLayoutWidget()
@@ -55,10 +60,10 @@ class ImpedanceWidget(QWidget):
         self._bar_plot.setLabel("left", "Impedance", units="k\u03A9")
         self._bar_plot.setLabel("bottom", "Channel")
         self._bar_plot.getAxis("bottom").setTicks(
-            [list(enumerate(cfg.DEFAULT_CHANNEL_NAMES[: self._n]))]
+            [list(enumerate(self._manager.channel_names[: self._n]))]
         )
         self._bar_item = pg.BarGraphItem(
-            x=list(range(self._n)), height=[0] * self._n, width=0.6, brush="#5fd38d"
+            x=list(range(self._n)), height=[0] * self._n, width=0.6, brush=palette.GOOD
         )
         self._bar_plot.addItem(self._bar_item)
         self._value_labels: List[pg.TextItem] = []
@@ -71,19 +76,26 @@ class ImpedanceWidget(QWidget):
         self._hist_plot.setLabel("left", "Impedance", units="k\u03A9")
         self._hist_plot.setLabel("bottom", "Time", units="s")
         self._hist_plot.showGrid(x=True, y=True, alpha=0.2)
-        self._hist_plot.addLegend()
+        self._hist_legend = self._hist_plot.addLegend()
         self._hist_curves: List[pg.PlotDataItem] = []
         for i in range(self._n):
             color = cfg.CHANNEL_COLORS[i % len(cfg.CHANNEL_COLORS)]
             self._hist_curves.append(
-                self._hist_plot.plot(pen=pg.mkPen(color, width=1.5), name=cfg.DEFAULT_CHANNEL_NAMES[i])
+                self._hist_plot.plot(pen=pg.mkPen(color, width=1.5), name=self._manager.channel_names[i])
             )
+
+    def set_channel_names(self, names: List[str]) -> None:
+        self._bar_plot.getAxis("bottom").setTicks([list(enumerate(names[: self._n]))])
+        for i, curve in enumerate(self._hist_curves):
+            if i < len(names):
+                self._hist_legend.removeItem(curve)
+                self._hist_legend.addItem(curve, names[i])
 
     def _on_toggle(self, checked: bool) -> None:
         if checked:
             self._manager.start_impedance()
             self.toggle_btn.setText("Stop impedance test")
-            self.status.setText("Impedance test running...")
+            self.status.setText("Impedance test running (data stream active)...")
         else:
             self._manager.stop_impedance()
             self.toggle_btn.setText("Start impedance test")

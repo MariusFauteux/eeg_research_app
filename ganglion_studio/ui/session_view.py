@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import List, Optional
+import time
+from typing import List, Optional, Protocol, runtime_checkable
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
@@ -19,10 +20,13 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from ganglion_studio import palette
 from ganglion_studio.core.board_manager import BoardManager
 from ganglion_studio.core.dsp import FilterSettings
 from ganglion_studio.core.session import MarkerEvent, SessionConfig, SessionRecorder
-from ganglion_studio.ui.widgets.accel_widget import AccelWidget
+from ganglion_studio.ui import theme
+from ganglion_studio.ui.channel_setup_dialog import ChannelSetupDialog
+from ganglion_studio.ui.review_window import ReviewWindow
 from ganglion_studio.ui.widgets.band_power_widget import BandPowerWidget
 from ganglion_studio.ui.widgets.channel_panel import ChannelPanel
 from ganglion_studio.ui.widgets.filter_panel import FilterPanel
@@ -30,11 +34,35 @@ from ganglion_studio.ui.widgets.impedance_widget import ImpedanceWidget
 from ganglion_studio.ui.widgets.marker_panel import MarkerPanel
 from ganglion_studio.ui.widgets.psd_widget import PSDWidget
 from ganglion_studio.ui.widgets.spectrogram_widget import SpectrogramWidget
+from ganglion_studio.ui.widgets.stats_panel import StatsPanel
 from ganglion_studio.ui.widgets.time_series import TimeSeriesWidget
+
+
+@runtime_checkable
+class PlotTab(Protocol):
+    """Structural contract for the plot tabs hosted in the session view.
+
+    A plot tab is just a ``QWidget`` that can redraw itself on demand. Tabs do
+    NOT need to inherit this Protocol -- it documents the duck-typed interface
+    that :meth:`SessionView._tick` relies on (and enables an optional
+    ``isinstance`` check). See docs/EXTENDING.md for a walkthrough.
+
+    Required
+        update_plot(settings, active): redraw using the live display-filter
+        ``settings`` and the per-channel ``active`` flags.
+
+    Optional (accessed via getattr/hasattr, so safe to omit)
+        refresh_hz (float): cap on redraws per second; omit for "every tick".
+        set_channel_names(names): relabel traces when the montage changes.
+    """
+
+    def update_plot(self, settings: FilterSettings, active: List[bool]) -> None:
+        ...
 
 
 class SessionView(QWidget):
     exit_session = pyqtSignal()
+    open_processing = pyqtSignal()
 
     def __init__(self, manager: BoardManager, config: SessionConfig) -> None:
         super().__init__()
@@ -43,6 +71,8 @@ class SessionView(QWidget):
         self._settings = FilterSettings(notch_freq=config.notch_freq)
         self._active: List[bool] = list(manager.channel_active)
         self._recorder: Optional[SessionRecorder] = None
+        self._reviews: List[ReviewWindow] = []  # keep refs so windows aren't GC'd
+        self._disconnect_handled = False  # one-shot guard for the BLE-drop notice
 
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
@@ -58,6 +88,10 @@ class SessionView(QWidget):
         splitter.setStretchFactor(1, 1)
         splitter.setStretchFactor(2, 0)
         splitter.setSizes([260, 900, 320])
+
+        # Acquisition runs on its own thread; the GUI timer only renders.
+        self._manager.start_acquisition()
+        self._last_status = 0.0
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
@@ -76,12 +110,22 @@ class SessionView(QWidget):
         mode = "DEMO" if self._config.demo else "GANGLION"
         tag = QLabel(mode)
         tag.setStyleSheet(
-            "background:#4f8ef7; color:#fff; border-radius:4px; padding:2px 6px; font-weight:600;"
+            f"background:{palette.ACCENT}; color:{palette.WHITE}; border-radius:4px; padding:2px 6px; font-weight:600;"
             if not self._config.demo else
-            "background:#e2c044; color:#15171c; border-radius:4px; padding:2px 6px; font-weight:600;"
+            f"background:{palette.OK}; color:#15171c; border-radius:4px; padding:2px 6px; font-weight:600;"
         )
         bar.addWidget(tag)
         bar.addStretch(1)
+
+        setup_btn = QPushButton("Channel setup")
+        setup_btn.setToolTip("Set channel type, electrode and 10-20 placement")
+        setup_btn.clicked.connect(self._open_channel_setup)
+        bar.addWidget(setup_btn)
+
+        lab_btn = QPushButton("Processing Lab")
+        lab_btn.setToolTip("Open the offline processing playground")
+        lab_btn.clicked.connect(self.open_processing.emit)
+        bar.addWidget(lab_btn)
 
         self.pause_btn = QPushButton("Pause stream")
         self.pause_btn.setCheckable(True)
@@ -103,7 +147,7 @@ class SessionView(QWidget):
         bar.addWidget(self.refresh_spin)
 
         self.status_label = QLabel("")
-        self.status_label.setStyleSheet("color:#9aa0aa;")
+        self.status_label.setStyleSheet(theme.MUTED_QSS)
         bar.addWidget(self.status_label)
         return bar
 
@@ -119,29 +163,31 @@ class SessionView(QWidget):
         self.filter_panel = FilterPanel(self._config.notch_freq)
         self.filter_panel.filters_changed.connect(self._on_filters_changed)
         layout.addWidget(self.filter_panel)
+
+        self.stats_panel = StatsPanel(self._manager)
+        layout.addWidget(self.stats_panel)
         layout.addStretch(1)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(container)
-        scroll.setFixedWidth(280)
+        scroll.setFixedWidth(310)
         return scroll
 
     def _build_tabs(self) -> QTabWidget:
+        # Every widget added here satisfies the PlotTab protocol (top of file).
         self.tabs = QTabWidget()
         self.time_series = TimeSeriesWidget(self._manager)
         self.psd = PSDWidget(self._manager)
         self.spectrogram = SpectrogramWidget(self._manager)
         self.impedance = ImpedanceWidget(self._manager)
         self.band_power = BandPowerWidget(self._manager)
-        self.accel = AccelWidget(self._manager)
 
         self.tabs.addTab(self.time_series, "Time Series")
         self.tabs.addTab(self.psd, "PSD")
         self.tabs.addTab(self.spectrogram, "Spectrogram / FFT")
         self.tabs.addTab(self.impedance, "Impedance")
         self.tabs.addTab(self.band_power, "Band Power")
-        self.tabs.addTab(self.accel, "Accel / Motion")
         return self.tabs
 
     def _build_right_panel(self) -> QWidget:
@@ -155,13 +201,44 @@ class SessionView(QWidget):
         self._timer.start(max(16, int(1000 / hz)))
 
     def _tick(self) -> None:
-        self._manager.poll()
-        current = self.tabs.currentWidget()
-        if hasattr(current, "update_plot"):
+        # A native-BLE link can drop mid-session (e.g. electrical disturbance);
+        # tell the user clearly instead of leaving a silently-frozen trace.
+        if self._manager.is_disconnected() and not self._disconnect_handled:
+            self._disconnect_handled = True
+            self.status_label.setText("Bluetooth disconnected")
+            QMessageBox.warning(
+                self, "Bluetooth disconnected",
+                "The Ganglion link dropped. Return to the Dashboard and start a "
+                "new session to reconnect.",
+            )
+            return
+        # Data acquisition happens on the background thread; here we only
+        # render the visible tab, throttled to its own preferred rate.
+        current: PlotTab = self.tabs.currentWidget()
+        if hasattr(current, "update_plot") and self._due(current):
             current.update_plot(self._settings, self._active)
+        if self._due(self.stats_panel):
+            self.stats_panel.update_stats(self._settings, self._active)
         self._update_status()
 
+    @staticmethod
+    def _due(widget) -> bool:
+        """Rate-limit a widget to its ``refresh_hz`` (default: every tick)."""
+        hz = getattr(widget, "refresh_hz", None)
+        if not hz:
+            return True
+        now = time.monotonic()
+        last = getattr(widget, "_last_render", 0.0)
+        if now - last >= (1.0 / hz) - 1e-3:
+            widget._last_render = now
+            return True
+        return False
+
     def _update_status(self) -> None:
+        now = time.monotonic()
+        if now - self._last_status < 0.5:  # throttle status to ~2 Hz
+            return
+        self._last_status = now
         rec = ""
         if self._manager.recording:
             secs = self._manager.recorded_sample_count() / max(1, self._manager.sampling_rate)
@@ -176,6 +253,19 @@ class SessionView(QWidget):
     def _on_channels_changed(self, active: List[bool]) -> None:
         self._active = active
 
+    def _open_channel_setup(self) -> None:
+        dialog = ChannelSetupDialog(self._manager, self)
+        if dialog.exec() != ChannelSetupDialog.DialogCode.Accepted:
+            return
+        names = dialog.names()
+        self._manager.set_channel_config(
+            names, dialog.types(), dialog.electrodes(), dialog.placements()
+        )
+        for widget in (self.time_series, self.psd, self.spectrogram, self.impedance,
+                       self.stats_panel, self.channel_panel):
+            if hasattr(widget, "set_channel_names"):
+                widget.set_channel_names(names)
+
     def _on_pause(self, paused: bool) -> None:
         if paused:
             self._manager.stop()
@@ -183,6 +273,8 @@ class SessionView(QWidget):
         else:
             self._manager.start()
             self.pause_btn.setText("Pause stream")
+        # Scrolling/zooming the time-series view is only enabled while paused.
+        self.time_series.set_paused(paused)
 
     def _on_record(self, recording: bool) -> None:
         if recording:
@@ -196,19 +288,32 @@ class SessionView(QWidget):
         if self._recorder is None:
             return
         raw = self._manager.stop_recording()
+        n_eeg = len(self._manager.eeg_channels)
         meta = {
             "sampling_rate": self._manager.sampling_rate,
             "board_id": self._manager.board_id,
             "eeg_channels": self._manager.eeg_channels,
-            "channel_names": ["Ch1", "Ch2", "Ch3", "Ch4"][: len(self._manager.eeg_channels)],
+            "channel_names": list(self._manager.channel_names[:n_eeg]),
+            "channel_types": list(self._manager.channel_types[:n_eeg]),
+            "electrodes": list(self._manager.electrodes[:n_eeg]),
+            "placements": list(self._manager.placements[:n_eeg]),
             "marker_channel": self._manager.marker_channel,
+            "notch_freq": self._config.notch_freq,
         }
-        written = self._recorder.save(raw, meta)
-        QMessageBox.information(
-            self, "Recording saved",
-            "Saved files:\n" + "\n".join(written),
-        )
+        # Always keep the lossless backup (CSV + meta + marker log).
+        self._recorder.save(raw, meta)
         self._recorder = None
+
+        if raw is None or raw.ndim != 2 or raw.shape[1] == 0:
+            QMessageBox.information(self, "Recording", "Recording was empty.")
+            return
+
+        # Open the review window so the user can browse, edit markers and export.
+        types = list(getattr(self.marker_panel, "_types", []))
+        code_labels = {mt.code: mt.label for mt in types}
+        review = ReviewWindow(raw, meta, code_labels, types, title=self._config.name)
+        review.show()
+        self._reviews.append(review)
 
     def _on_marker(self, code: int, label: str, ts: float) -> None:
         self._manager.insert_marker(code)
@@ -227,5 +332,6 @@ class SessionView(QWidget):
 
     def shutdown(self) -> None:
         self._timer.stop()
+        self._manager.stop_acquisition()
         if self._manager.recording:
             self._manager.stop_recording()

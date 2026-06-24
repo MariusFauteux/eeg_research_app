@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import (
 from ganglion_studio.core.board_manager import BoardManager
 from ganglion_studio.core.session import SessionConfig
 from ganglion_studio.ui.dashboard import Dashboard
+from ganglion_studio.ui.processing_window import ProcessingWindow
 from ganglion_studio.ui.session_view import SessionView
 
 
@@ -48,6 +49,7 @@ class MainWindow(QMainWindow):
 
         self.dashboard = Dashboard()
         self.dashboard.start_session.connect(self._on_start_session)
+        self.dashboard.open_processing.connect(self._open_processing_lab)
         self.stack.addWidget(self.dashboard)
 
         self.session_view: Optional[SessionView] = None
@@ -55,13 +57,22 @@ class MainWindow(QMainWindow):
         self._worker: Optional[PrepareWorker] = None
         self._progress: Optional[QProgressDialog] = None
         self._pending_config: Optional[SessionConfig] = None
+        self._processing_windows: list[ProcessingWindow] = []
+
+    def _open_processing_lab(self) -> None:
+        window = ProcessingWindow()
+        window.show()
+        window.raise_()
+        self._processing_windows.append(window)
 
     def _on_start_session(self, config: SessionConfig) -> None:
         self._pending_config = config
         self.manager = BoardManager(
             demo=config.demo,
             mac_address=config.mac_address,
+            serial_port=config.serial_port,
             firmware=config.firmware,
+            use_custom_native=config.use_custom_native,
         )
         self._progress = QProgressDialog(
             "Connecting to the board..." if not config.demo else "Starting demo board...",
@@ -83,6 +94,7 @@ class MainWindow(QMainWindow):
         assert self.manager is not None and self._pending_config is not None
         self.session_view = SessionView(self.manager, self._pending_config)
         self.session_view.exit_session.connect(self._on_exit_session)
+        self.session_view.open_processing.connect(self._open_processing_lab)
         self.stack.addWidget(self.session_view)
         self.stack.setCurrentWidget(self.session_view)
 
@@ -114,4 +126,6 @@ class MainWindow(QMainWindow):
             self.session_view.shutdown()
         if self.manager is not None:
             self.manager.release()
+        for window in self._processing_windows:
+            window.close()
         super().closeEvent(event)

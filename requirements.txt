@@ -3,9 +3,29 @@ brainflow>=5.22
 PyQt6>=6.6
 pyqtgraph>=0.13
 bleak>=0.21
+pyserial>=3.5  # BLED112 dongle serial-port discovery (native BLE works without it)
 numpy>=1.24
 scipy>=1.10
 
-# Optional: EDF/FIF export for downstream analysis (MNE).
-# The app runs fine without it; export menu entries are disabled if missing.
+# Optional: recording review/export to research formats.
+# The app runs fine without these; export entries are disabled if missing.
+#   mne     - native .fif save + export framework
+#   eeglabio - EEGLAB .set export (mne fmt="eeglab")
+#   edfio   - EDF .edf export (mne fmt="edf")
+# Note: .gdf writing is not supported by these libraries (GDF is read-only in
+# MNE); it is offered best-effort via the optional BioSig toolkit if installed.
 mne>=1.5
+eeglabio>=0.0.2
+edfio>=0.4
+
+# Optional: Processing Lab algorithms.
+#   meegkit   - Artifact Subspace Reconstruction (ASR)
+#   neurokit2 - ECG R-peak detection for R-peak-locked AAS artifact removal
+# Wavelet denoising uses BrainFlow (already required). Controls are disabled in
+# the UI if the corresponding backend is not installed.
+meegkit>=0.1.7
+neurokit2>=0.2
+
+# Development / testing only (not needed to run the app).
+#   pytest - unit tests under tests/ (run: python -m pytest tests/ -q)
+pytest>=7.0
