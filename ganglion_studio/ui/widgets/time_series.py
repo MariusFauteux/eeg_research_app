@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import List
 
 import numpy as np
@@ -23,6 +24,7 @@ from ganglion_studio.core.dsp import (
     FILTER_WARMUP_SEC,
     FilterSettings,
     apply_filters_windowed,
+    interpolate_gaps,
 )
 
 
@@ -67,6 +69,10 @@ class TimeSeriesWidget(QWidget):
         # rebuild the pool when the marker count or visible-plot set changes.
         self._marker_lines: List = []
         self._marker_state = None
+        # BLE packet-loss overlay (same pooling idea) + throttled quality readout.
+        self._loss_lines: List = []
+        self._loss_state = None
+        self._last_quality_t = 0.0
 
     def set_channel_names(self, names: List[str]) -> None:
         for i, p in enumerate(self._plots):
@@ -96,13 +102,31 @@ class TimeSeriesWidget(QWidget):
         self.show_markers.setChecked(True)
         bar.addWidget(self.show_markers)
 
+        # Interpolate over BLE packet-losses before filtering (off = raw view).
+        self.repair_chk = QCheckBox("Repair gaps")
+        self.repair_chk.setToolTip(
+            "Interpolate over dropped-packet seams so they don't ring. Off shows the "
+            "raw signal; the yellow drop markers appear either way."
+        )
+        bar.addWidget(self.repair_chk)
+
         self.scroll_hint = QLabel("Pause the stream to scroll/zoom")
         self.scroll_hint.setStyleSheet(theme.HINT_QSS)
         bar.addWidget(self.scroll_hint)
         bar.addStretch(1)
+
+        # Right-aligned live signal quality / BLE packet-loss readout.
+        self.quality_label = QLabel("Signal: good")
+        self.quality_label.setStyleSheet(f"color: {palette.GOOD};")
+        self.quality_label.setToolTip(
+            "Native-Bluetooth packet loss. Each drop is marked on the trace and "
+            "saved with recordings. High loss → move closer or use the dongle."
+        )
+        bar.addWidget(self.quality_label)
         return bar
 
     def update_plot(self, settings: FilterSettings, active: List[bool]) -> None:
+        self._update_quality()
         # While paused the user is free to scroll/zoom, so leave the frozen view
         # untouched; live updates resume (and re-pin the view) on un-pause.
         if self._paused:
@@ -120,13 +144,24 @@ class TimeSeriesWidget(QWidget):
         # seconds in the past, scrolling left — matches the OpenBCI GUI.
         t = (np.arange(n_vis) - (n_vis - 1)) / sr if n_vis else np.array([])
 
+        # BLE-loss flags for the same window (drives the overlay below, and the
+        # optional gap repair: mark each drop's two held-flat samples as "bad").
+        loss_full = self._manager.recent_loss(seconds + FILTER_WARMUP_SEC)
+        repair_mask = None
+        if self.repair_chk.isChecked() and loss_full.size == full.shape[1] and loss_full.any():
+            repair_mask = loss_full != 0
+            repair_mask[1:] |= (loss_full[:-1] != 0)  # also the 2nd held sample
+
         for i in range(self._n):
             visible = active[i] if i < len(active) else True
             self._plots[i].setVisible(visible)
             if not visible or n_vis == 0:
                 self._curves[i].clear()
                 continue
-            filtered = apply_filters_windowed(full[eeg_rows[i]], sr, settings, n_vis)
+            chan = full[eeg_rows[i]]
+            if repair_mask is not None:
+                chan = interpolate_gaps(chan, repair_mask)
+            filtered = apply_filters_windowed(chan, sr, settings, n_vis)
             self._curves[i].setData(t, filtered)
             if self.autoscale.isChecked():
                 self._plots[i].enableAutoRange(axis="y")
@@ -142,6 +177,12 @@ class TimeSeriesWidget(QWidget):
             marker_row = vis[mch]
         self._draw_markers(t, sr, marker_row)
 
+        # Mark BLE packet-losses (reusing loss_full from above) so the user can
+        # tell a dropped-packet seam from a real transient -- shown even when the
+        # trace is being repaired, so nothing is hidden.
+        loss_vis = loss_full[-n_vis:] if (n_vis and loss_full.size) else np.zeros(0)
+        self._draw_loss(t, sr, loss_vis)
+
     def set_paused(self, paused: bool) -> None:
         """Allow trackpad/mouse scroll & zoom only while the stream is paused.
         On resume the next update_plot re-pins the live window ("now" at the
@@ -149,6 +190,61 @@ class TimeSeriesWidget(QWidget):
         self._paused = paused
         for p in self._plots:
             p.setMouseEnabled(x=paused, y=paused)
+
+    def _update_quality(self) -> None:
+        """Refresh the signal-quality / BLE-loss readout (throttled, native only)."""
+        now = time.time()
+        if now - self._last_quality_t < 0.4:
+            return
+        self._last_quality_t = now
+        rate = self._manager.loss_rate(10.0)   # dropped packets/s over last 10 s
+        total = self._manager.dropped_packets()
+        if rate < 0.1:
+            quality, color = "good", palette.GOOD
+        elif rate < 1.0:
+            quality, color = "fair", palette.OK
+        else:
+            quality, color = "poor", palette.BAD
+        if total == 0:
+            self.quality_label.setText("Signal: good")
+            color = palette.GOOD
+        else:
+            self.quality_label.setText(
+                f"Signal: {quality}  ·  BLE loss {rate:.1f}/s  ({total} dropped)"
+            )
+        self.quality_label.setStyleSheet(f"color: {color};")
+
+    def _clear_loss_lines(self) -> None:
+        for line, plot in self._loss_lines:
+            plot.removeItem(line)
+        self._loss_lines = []
+        self._loss_state = None
+
+    def _draw_loss(self, t: np.ndarray, sr: int, loss_vis: np.ndarray) -> None:
+        """Dotted vertical marks where the BLE link dropped a packet."""
+        if loss_vis is None or t.size == 0 or loss_vis.size == 0 or not loss_vis.any():
+            if self._loss_lines:
+                self._clear_loss_lines()
+            return
+        xs = (np.flatnonzero(loss_vis != 0) - (t.size - 1)) / sr
+        visible = tuple(i for i in range(self._n) if self._plots[i].isVisible())
+        state = (len(xs), visible)
+        if state != self._loss_state:
+            self._clear_loss_lines()
+            for _x in xs:
+                for pi in visible:
+                    line = pg.InfiniteLine(
+                        angle=90,
+                        pen=pg.mkPen(palette.OK, width=1, style=pg.QtCore.Qt.PenStyle.DotLine),
+                    )
+                    self._plots[pi].addItem(line)
+                    self._loss_lines.append((line, self._plots[pi]))
+            self._loss_state = state
+        k = 0
+        for x in xs:
+            for _pi in visible:
+                self._loss_lines[k][0].setValue(float(x))
+                k += 1
 
     def _clear_marker_lines(self) -> None:
         for line, plot in self._marker_lines:

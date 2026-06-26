@@ -171,6 +171,15 @@ class Dashboard(QWidget):
         self.fw_combo.addItems(["3 (default)", "2 (legacy)", "auto"])
         form.addRow("Firmware", self.fw_combo)
 
+        self.decode_combo = QComboBox()
+        self.decode_combo.addItems(["Delta (firmware ≤ 2.x)", "MSB (firmware 3.0.2+)"])
+        self.decode_combo.setToolTip(
+            "Native-Bluetooth sample encoding. Firmware 3.0.2+ sends absolute MSB "
+            "samples; older firmware sends deltas. Pick the one matching your board "
+            "(wrong choice looks like noise). Ignored for the dongle."
+        )
+        form.addRow("Decoding", self.decode_combo)
+
         self.notch_combo = QComboBox()
         self.notch_combo.addItems(["50 Hz (EU)", "60 Hz (US)"])
         form.addRow("Mains notch", self.notch_combo)
@@ -309,6 +318,7 @@ class Dashboard(QWidget):
         self.scan_box.setEnabled(native_live)
         self.mac_edit.setEnabled(native_live)
         self.fw_combo.setEnabled(not demo)  # firmware applies to the dongle too
+        self.decode_combo.setEnabled(native_live)  # custom native driver only
         self._form.setRowVisible(self._port_row, dongle and not demo)
         if dongle and not demo:
             if self.port_combo.count() == 0:
@@ -354,5 +364,6 @@ class Dashboard(QWidget):
             firmware=fw,
             notch_freq=notch,
             use_custom_native=self.conn_combo.currentText().endswith("(Custom)"),
+            decode_mode="msb" if self.decode_combo.currentIndex() == 1 else "delta",
         )
         self.start_session.emit(config)

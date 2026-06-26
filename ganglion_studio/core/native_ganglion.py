@@ -66,12 +66,15 @@ def _sign_extend(value: int, bits: int) -> int:
     return value
 
 
-def _unpack_fields(payload: bytes, width: int, count: int) -> List[int]:
-    """Split the first ``count*width`` bits of ``payload`` into signed ints.
+def _unpack_fields(payload: bytes, width: int, count: int,
+                   signed: bool = True) -> List[int]:
+    """Split the first ``count*width`` bits of ``payload`` into ints.
 
-    The Ganglion packs its delta fields big-endian and back-to-back (no byte
-    alignment), so we read the bytes as one big integer and slice fixed-width
-    fields from the most-significant end.
+    The Ganglion packs its fields big-endian and back-to-back (no byte alignment),
+    so we read the bytes as one big integer and slice fixed-width fields from the
+    most-significant end. ``signed=True`` two's-complement-extends each field (delta
+    mode); ``signed=False`` returns the raw unsigned fields (MSB mode, which does its
+    own bit surgery).
     """
     nbits = width * count
     nbytes = nbits // 8
@@ -80,8 +83,23 @@ def _unpack_fields(payload: bytes, width: int, count: int) -> List[int]:
     out: List[int] = []
     for k in range(count):
         field = (v >> (nbits - (k + 1) * width)) & mask
-        out.append(_sign_extend(field, width))
+        out.append(_sign_extend(field, width) if signed else field)
     return out
+
+
+def _msb_to_count(field: int, width: int) -> int:
+    """Reconstruct the 24-bit ADC count from a firmware-3.0.2 MSB-truncated field.
+
+    ``compressData18/19`` (firmware >= 3.0.2) drop the low bits of the absolute
+    24-bit sample, copy the sign bit into the field's LSB, and keep the upper
+    ``width-1`` magnitude bits above it. To reverse: drop that LSB sign copy,
+    sign-extend the remaining ``width-1`` bits, and shift back up to 24-bit
+    (low bits are lost to truncation). Round-trips exactly against the firmware.
+    """
+    data_bits = width - 1            # 18 for the 19-bit packet, 17 for the 18-bit
+    shift = 24 - data_bits           # 6 / 7 -- restore the dropped LSBs as zeros
+    mag = (field >> 1) & ((1 << data_bits) - 1)
+    return _sign_extend(mag, data_bits) << shift
 
 
 class GanglionDecoder:
@@ -106,9 +124,16 @@ class GanglionDecoder:
         step. We detect the counter discontinuity and hold flat instead.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, mode: str = "delta") -> None:
+        # "delta": firmware <= 2.x sends deltas (integrate). "msb": firmware 3.0.2+
+        # sends absolute MSB-truncated samples (reconstruct, no integration).
+        self.mode = "msb" if mode == "msb" else "delta"
         self._running = [0] * NUM_EEG     # running raw counts per channel
         self._last_id: Optional[int] = None
+        # Count of packets the BLE link lost (decoded as a held-flat seam). The
+        # worker reads this to flag the affected samples, so the app can show a
+        # live signal-quality readout and save loss timepoints with a recording.
+        self.dropped = 0
 
     def _is_continuous(self, packet_id: int) -> bool:
         """True if ``packet_id`` directly follows the previous one (no loss).
@@ -159,11 +184,25 @@ class GanglionDecoder:
             # (the pulse). Hold the last value flat for this packet instead. The
             # small DC step is removed by the app's high-pass; a couple of flat ms
             # is invisible next to a full-scale spike.
+            self.dropped += 1
             return [self._emit(), self._emit()]
 
-        # Two samples per packet, 4 channels each, signed deltas.
-        deltas = _unpack_fields(payload, width, 2 * NUM_EEG)
+        # Two samples per packet, 4 channels each.
         out: List[List[float]] = []
+        if self.mode == "msb":
+            # Firmware 3.0.2+: each field is an absolute MSB-truncated sample, not a
+            # delta. Reconstruct the 24-bit count and store it directly -- no
+            # integration, so a dropped packet can never smear or drift. We keep it
+            # in _running so a following hold-flat repeats the last absolute value.
+            fields = _unpack_fields(payload, width, 2 * NUM_EEG, signed=False)
+            for s in range(2):
+                for ch in range(NUM_EEG):
+                    self._running[ch] = _msb_to_count(fields[s * NUM_EEG + ch], width)
+                out.append(self._emit())
+            return out
+
+        # Delta mode (firmware <= 2.x): integrate signed deltas.
+        deltas = _unpack_fields(payload, width, 2 * NUM_EEG)
         for s in range(2):
             for ch in range(NUM_EEG):
                 # OpenBCI convention: new = previous - delta. (Polarity only; if it
@@ -182,7 +221,7 @@ class GanglionDecoder:
 # ---------------------------------------------------------------------------
 # Subprocess BLE worker (runs in a child process; CoreBluetooth-legal on macOS)
 # ---------------------------------------------------------------------------
-def _ble_worker_main(address, timeout, data_q, ctrl_q, status_q) -> None:  # pragma: no cover - needs hardware
+def _ble_worker_main(address, timeout, data_q, ctrl_q, status_q, decode_mode="delta") -> None:  # pragma: no cover - needs hardware
     """Child-process entry point: connect, stream, decode, ship chunks home."""
     import asyncio
 
@@ -193,18 +232,26 @@ def _ble_worker_main(address, timeout, data_q, ctrl_q, status_q) -> None:  # pra
             status_q.put(("error", f"bleak not available: {exc}"))
             return
 
-        decoder = GanglionDecoder()
+        decoder = GanglionDecoder(mode=decode_mode)
 
         def on_notify(_handle, data: bytearray) -> None:
             # Never let a decode hiccup propagate into bleak's callback machinery
             # (an unhandled exception there can tear down the notification loop).
             try:
+                before = decoder.dropped
                 samples = decoder.decode(bytes(data))
                 if not samples:
                     return
                 arr = np.asarray(samples, dtype=np.float64).T          # (NUM_EEG, k)
-                ts = np.full(arr.shape[1], time.time(), dtype=np.float64)
-                data_q.put(np.vstack([arr, ts]))                       # (NUM_EEG+1, k)
+                k = arr.shape[1]
+                ts = np.full(k, time.time(), dtype=np.float64)
+                # Loss flag row: one impulse (1.0) on the first held-flat sample of
+                # a dropped packet, else 0. Rides alongside the data so the parent
+                # can align loss exactly with the samples (signal quality + saving).
+                loss = np.zeros(k, dtype=np.float64)
+                if decoder.dropped > before:
+                    loss[0] = 1.0
+                data_q.put(np.vstack([arr, ts, loss]))                 # (NUM_EEG+2, k)
             except Exception as exc:  # pragma: no cover - defensive
                 logger.warning("native decode/notify error: %s", exc)
 
@@ -273,6 +320,7 @@ class NativeGanglionClient:
         timestamp_channel: int,
         marker_channel: int,
         timeout: float = 20.0,
+        decode_mode: str = "delta",
     ) -> None:
         if not address:
             raise ValueError("a BLE address/UUID is required for native connection")
@@ -282,6 +330,7 @@ class NativeGanglionClient:
         self.timestamp_channel = timestamp_channel
         self.marker_channel = marker_channel
         self.timeout = timeout
+        self.decode_mode = "msb" if decode_mode == "msb" else "delta"
 
         ctx = mp.get_context("spawn")  # required on macOS; safe everywhere
         self._data_q: mp.Queue = ctx.Queue()
@@ -291,12 +340,16 @@ class NativeGanglionClient:
         self._proc: Optional[mp.process.BaseProcess] = None
         self._pending_marker: Optional[float] = None
         self._disconnected = False
+        # Per-sample BLE-loss flags aligned with the last get_board_data() return
+        # (1.0 at each dropped packet). BoardManager reads this each poll.
+        self.last_loss: np.ndarray = np.zeros(0, dtype=np.float64)
 
     # -- lifecycle ----------------------------------------------------------
     def prepare_session(self) -> None:
         self._proc = self._ctx.Process(
             target=_ble_worker_main,
-            args=(self.address, self.timeout, self._data_q, self._ctrl_q, self._status_q),
+            args=(self.address, self.timeout, self._data_q, self._ctrl_q,
+                  self._status_q, self.decode_mode),
             name="ganglion-ble",
             daemon=True,
         )
@@ -365,12 +418,18 @@ class NativeGanglionClient:
             except queue.Empty:
                 break
         if not chunks:
+            self.last_loss = np.zeros(0, dtype=np.float64)
             return np.zeros((self.num_rows, 0))
-        block = np.concatenate(chunks, axis=1)  # (NUM_EEG+1, n): eeg rows + ts
+        block = np.concatenate(chunks, axis=1)  # (NUM_EEG+2, n): eeg + ts + loss
+        self.last_loss = block[NUM_EEG + 1].copy()  # loss-flag row (kept aside)
         return self._to_matrix(block)
 
     def _to_matrix(self, block: np.ndarray) -> np.ndarray:
-        """Map a (NUM_EEG+1, n) eeg+timestamp block onto the BrainFlow row layout."""
+        """Map an eeg+timestamp(+loss) block onto the BrainFlow row layout.
+
+        Uses rows 0..NUM_EEG (EEG + timestamp); any trailing loss row is ignored
+        here -- get_board_data peels it off into last_loss.
+        """
         n = block.shape[1]
         out = np.zeros((self.num_rows, n), dtype=np.float64)
         for i, row in enumerate(self.eeg_channels):

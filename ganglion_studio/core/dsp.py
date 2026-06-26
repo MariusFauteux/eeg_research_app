@@ -149,6 +149,28 @@ def apply_filters_windowed(channel: np.ndarray, sampling_rate: int,
     return filtered[-visible:]
 
 
+def interpolate_gaps(channel: np.ndarray, bad_mask: np.ndarray) -> np.ndarray:
+    """Linearly interpolate the ``True`` positions of ``bad_mask`` from the
+    surrounding good samples. Returns a copy; a no-op if nothing (or everything)
+    is masked, or if the shapes disagree.
+
+    Repairs BLE packet-loss seams *before* filtering: the decoder holds the last
+    value flat on a dropped packet, which is a sharp DC step the band-pass rings
+    on. Replacing those held samples with a smooth ramp between the good samples on
+    either side removes the step, so the filter no longer rings. Gaps of any width
+    (consecutive drops) are bridged; positions with no good sample to one side fall
+    back to the nearest good value (``np.interp`` clamps at the edges).
+    """
+    data = np.array(channel, dtype=np.float64)  # copy (callers pass ring slices)
+    bad = np.asarray(bad_mask, dtype=bool)
+    if bad.shape != data.shape or not bad.any() or bad.all():
+        return data
+    good = ~bad
+    x = np.arange(data.size)
+    data[bad] = np.interp(x[bad], x[good], data[good])
+    return data
+
+
 def compute_psd(channel: np.ndarray, sampling_rate: int
                 ) -> Tuple[np.ndarray, np.ndarray]:
     """Power spectral density via Welch's method (BrainFlow).

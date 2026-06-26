@@ -104,6 +104,13 @@ class ProcessingWindow(QWidget):
         # Re-reference + detrend
         pre_box = QGroupBox("Pre-processing")
         pf = QFormLayout(pre_box)
+        self.repair_chk = QCheckBox("Repair BLE gaps (interpolate)")
+        self.repair_chk.setToolTip(
+            "Interpolate over native-Bluetooth packet losses before filtering, so "
+            "dropped-packet seams don't ring. Uses the saved _packet_loss.csv."
+        )
+        self.repair_chk.toggled.connect(self._schedule)
+        pf.addRow(self.repair_chk)
         self.reref_chk = QCheckBox("Common average (CAR)")
         self.reref_chk.toggled.connect(self._schedule)
         pf.addRow(self.reref_chk)
@@ -463,6 +470,8 @@ class ProcessingWindow(QWidget):
 
     def _build_config(self) -> proc.ProcessingConfig:
         c = proc.ProcessingConfig()
+        c.repair_gaps = self.repair_chk.isChecked()
+        c.loss_samples = list(self._rec.loss_samples) if self._rec is not None else []
         c.reref_car = self.reref_chk.isChecked()
         c.detrend = self.detrend_combo.currentText()
         c.filters.enabled = self.filter_box.isChecked()

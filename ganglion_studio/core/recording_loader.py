@@ -6,6 +6,7 @@ as well as MNE-readable formats (.fif / .edf / .set / .gdf).
 
 from __future__ import annotations
 
+import csv
 import json
 import os
 from dataclasses import dataclass, field
@@ -32,6 +33,8 @@ class LoadedRecording:
     source_path: str = ""
     channel_types: List[str] = field(default_factory=list)
     electrodes: List[str] = field(default_factory=list)
+    # Sample indices where native BLE dropped a packet (from _packet_loss.csv).
+    loss_samples: List[int] = field(default_factory=list)
 
     @property
     def n_channels(self) -> int:
@@ -63,6 +66,27 @@ def _meta_path_for(path: str) -> Optional[str]:
     else:
         cand = os.path.splitext(path)[0] + "_meta.json"
     return cand if os.path.exists(cand) else None
+
+
+def _load_loss_samples(path: str) -> List[int]:
+    """Read the sibling ``_packet_loss.csv`` (sample_index column), if present."""
+    if path.endswith("_raw.csv"):
+        cand = path[: -len("_raw.csv")] + "_packet_loss.csv"
+    else:
+        cand = os.path.splitext(path)[0] + "_packet_loss.csv"
+    if not os.path.exists(cand):
+        return []
+    out: List[int] = []
+    try:
+        with open(cand, newline="", encoding="utf-8") as fh:
+            reader = csv.reader(fh)
+            next(reader, None)  # header: sample_index,time_s
+            for row in reader:
+                if row:
+                    out.append(int(float(row[0])))
+    except Exception:
+        return []
+    return out
 
 
 def _load_csv(path: str) -> LoadedRecording:
@@ -108,7 +132,8 @@ def _load_csv(path: str) -> LoadedRecording:
 
     return LoadedRecording(eeg, sr, names, markers, path,
                            channel_types=ch_types[: len(eeg_rows)],
-                           electrodes=electrodes[: len(eeg_rows)])
+                           electrodes=electrodes[: len(eeg_rows)],
+                           loss_samples=_load_loss_samples(path))
 
 
 def _load_mne(path: str) -> LoadedRecording:

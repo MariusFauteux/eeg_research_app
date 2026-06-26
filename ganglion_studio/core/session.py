@@ -6,6 +6,7 @@ is written to disk). On stop we write:
 * ``<session>_raw.csv``  - BrainFlow native format (DataFilter.write_file)
 * ``<session>_meta.json`` - session metadata + channel map
 * ``<session>_markers.csv`` - annotation log
+* ``<session>_packet_loss.csv`` - sample indices where native BLE dropped a packet
 * ``<session>_raw.edf``  - optional, only if MNE is installed
 """
 
@@ -35,6 +36,9 @@ class SessionConfig:
     # Native BLE only: use the custom bleak driver (True) vs BrainFlow's native
     # backend (False). Ignored for demo/dongle. See core/native_ganglion.py.
     use_custom_native: bool = True
+    # Native BLE sample encoding: "delta" (firmware <= 2.x) or "msb" (firmware
+    # 3.0.2+ sends absolute MSB-truncated samples). Custom native only.
+    decode_mode: str = "delta"
 
     def safe_name(self) -> str:
         keep = "-_ "
@@ -77,11 +81,18 @@ class SessionRecorder:
     def _path(self, suffix: str) -> str:
         return os.path.join(self.out_dir, f"{self.file_prefix}{suffix}")
 
-    def save(self, raw_data: np.ndarray, meta: dict) -> List[str]:
-        """Persist the recording. Returns the list of written file paths."""
+    def save(self, raw_data: np.ndarray, meta: dict,
+             loss_samples: Optional[List[int]] = None) -> List[str]:
+        """Persist the recording. Returns the list of written file paths.
+
+        ``loss_samples`` are sample indices (within this recording) where the
+        native BLE link dropped a packet; they are written to a sidecar CSV so the
+        gaps can be inspected or excluded during offline processing.
+        """
         if not self.out_dir:
             self.begin()
         written: List[str] = []
+        loss_samples = list(loss_samples or [])
 
         if raw_data is not None and raw_data.size:
             csv_path = self._path("_raw.csv")
@@ -94,6 +105,7 @@ class SessionRecorder:
             "started_at": self.started_at.isoformat() if self.started_at else None,
             "ended_at": datetime.now().isoformat(),
             "n_samples": int(raw_data.shape[1]) if raw_data is not None and raw_data.ndim == 2 else 0,
+            "n_packet_losses": len(loss_samples),
             **meta,
         }
         with open(meta_path, "w", encoding="utf-8") as fh:
@@ -107,6 +119,16 @@ class SessionRecorder:
             for ev in self.markers:
                 writer.writerow([f"{ev.timestamp:.3f}", ev.time_str, ev.code, ev.label])
         written.append(marker_path)
+
+        # Packet-loss sidecar: sample index + seconds from recording start.
+        sr = max(1, int(meta.get("sampling_rate", 200)))
+        loss_path = self._path("_packet_loss.csv")
+        with open(loss_path, "w", newline="", encoding="utf-8") as fh:
+            writer = csv.writer(fh)
+            writer.writerow(["sample_index", "time_s"])
+            for s in loss_samples:
+                writer.writerow([int(s), f"{int(s) / sr:.4f}"])
+        written.append(loss_path)
 
         edf = self._try_export_edf(raw_data, meta)
         if edf:

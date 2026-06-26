@@ -73,6 +73,7 @@ class MainWindow(QMainWindow):
             serial_port=config.serial_port,
             firmware=config.firmware,
             use_custom_native=config.use_custom_native,
+            decode_mode=config.decode_mode,
         )
         self._progress = QProgressDialog(
             "Connecting to the board..." if not config.demo else "Starting demo board...",

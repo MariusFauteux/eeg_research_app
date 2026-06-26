@@ -288,6 +288,7 @@ class SessionView(QWidget):
         if self._recorder is None:
             return
         raw = self._manager.stop_recording()
+        loss_samples = self._manager.recorded_loss_indices()
         n_eeg = len(self._manager.eeg_channels)
         meta = {
             "sampling_rate": self._manager.sampling_rate,
@@ -300,8 +301,8 @@ class SessionView(QWidget):
             "marker_channel": self._manager.marker_channel,
             "notch_freq": self._config.notch_freq,
         }
-        # Always keep the lossless backup (CSV + meta + marker log).
-        self._recorder.save(raw, meta)
+        # Always keep the lossless backup (CSV + meta + marker + packet-loss log).
+        self._recorder.save(raw, meta, loss_samples=loss_samples)
         self._recorder = None
 
         if raw is None or raw.ndim != 2 or raw.shape[1] == 0:
