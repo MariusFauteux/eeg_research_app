@@ -300,6 +300,7 @@ class SessionView(QWidget):
             "electrodes": list(self._manager.electrodes[:n_eeg]),
             "placements": list(self._manager.placements[:n_eeg]),
             "marker_channel": self._manager.marker_channel,
+            "timestamp_channel": self._manager.timestamp_channel,
             "notch_freq": self._config.notch_freq,
         }
         # Always keep the lossless backup (CSV + meta + marker + packet-loss log).

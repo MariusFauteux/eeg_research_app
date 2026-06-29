@@ -96,7 +96,8 @@ class SessionRecorder:
 
         if raw_data is not None and raw_data.size:
             csv_path = self._path("_raw.csv")
-            DataFilter.write_file(np.ascontiguousarray(raw_data), csv_path, "w")
+            to_write = self._with_acquisition_clock(raw_data, meta)
+            DataFilter.write_file(np.ascontiguousarray(to_write), csv_path, "w")
             written.append(csv_path)
 
         meta_path = self._path("_meta.json")
@@ -134,6 +135,38 @@ class SessionRecorder:
         if edf:
             written.append(edf)
         return written
+
+    def _with_acquisition_clock(self, raw_data: np.ndarray, meta: dict) -> np.ndarray:
+        """Return a copy of ``raw_data`` with a clean, evenly spaced time column.
+
+        The native-BLE driver stamps every sample in a packet with the host's
+        *arrival time* of that packet (``time.time()`` once per packet). Because
+        each Ganglion packet carries two samples, both got the identical
+        timestamp, and because the OS delivers BLE notifications in bursts the
+        spacing jumped around (two samples at the same instant, then a gap). That
+        column is therefore useless as a time axis.
+
+        The board samples at a fixed rate, so we rebuild the timestamp row as a
+        monotonic acquisition clock: ``t0 + sample_index / sampling_rate``. We
+        anchor ``t0`` on the first real arrival timestamp (best wall-clock guess
+        for sample 0), falling back to the recording start time. Only the
+        timestamp row is touched; EEG values are copied through unchanged.
+        """
+        ts_row = int(meta.get("timestamp_channel", -1))
+        sr = int(meta.get("sampling_rate", 200))
+        if ts_row < 0 or ts_row >= raw_data.shape[0] or sr <= 0:
+            return raw_data
+        original = raw_data[ts_row]
+        valid = original[np.isfinite(original) & (original > 0)]
+        if valid.size:
+            t0 = float(valid[0])
+        elif self.started_at is not None:
+            t0 = self.started_at.timestamp()
+        else:
+            t0 = 0.0
+        out = raw_data.copy()
+        out[ts_row] = t0 + np.arange(raw_data.shape[1], dtype=np.float64) / float(sr)
+        return out
 
     def _try_export_edf(self, raw_data: np.ndarray, meta: dict) -> Optional[str]:
         if raw_data is None or raw_data.ndim != 2 or raw_data.shape[1] == 0:
