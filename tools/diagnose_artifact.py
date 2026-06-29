@@ -14,8 +14,8 @@ What it answers
 
 Usage
 -----
-    .venv/bin/python diagnose_artifact.py recordings/<session>/<session>_raw.csv
-    .venv/bin/python diagnose_artifact.py recordings/<session>        # folder ok
+    .venv/bin/python tools/diagnose_artifact.py recordings/<session>/<session>_raw.csv
+    .venv/bin/python tools/diagnose_artifact.py recordings/<session>        # folder ok
 """
 
 from __future__ import annotations

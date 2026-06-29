@@ -1,4 +1,5 @@
 # Ganglion EEG Studio dependencies
+# (Also declared, split into named extras, in pyproject.toml -- keep in sync.)
 brainflow>=5.22
 PyQt6>=6.6
 pyqtgraph>=0.13

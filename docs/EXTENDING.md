@@ -18,7 +18,8 @@ def set_channel_names(self, names) -> None: ...         # optional: relabel trac
 
 Steps:
 
-1. Create `ui/widgets/my_widget.py`. Read recent data from the manager and draw:
+1. Create `ui/plots/my_widget.py` (plot tabs live in `ui/plots/`; side-column
+   controls live in `ui/panels/`). Read recent data from the manager and draw:
 
    ```python
    import pyqtgraph as pg
@@ -47,7 +48,7 @@ Steps:
 2. Register it in `ui/session_view.py` → `_build_tabs`:
 
    ```python
-   from ganglion_studio.ui.widgets.my_widget import MyWidget
+   from ganglion_studio.ui.plots.my_widget import MyWidget
    ...
    self.my_widget = MyWidget(self._manager)
    self.tabs.addTab(self.my_widget, "My View")

@@ -27,15 +27,16 @@ from ganglion_studio.core.session import MarkerEvent, SessionConfig, SessionReco
 from ganglion_studio.ui import theme
 from ganglion_studio.ui.channel_setup_dialog import ChannelSetupDialog
 from ganglion_studio.ui.review_window import ReviewWindow
-from ganglion_studio.ui.widgets.band_power_widget import BandPowerWidget
-from ganglion_studio.ui.widgets.channel_panel import ChannelPanel
-from ganglion_studio.ui.widgets.filter_panel import FilterPanel
-from ganglion_studio.ui.widgets.impedance_widget import ImpedanceWidget
-from ganglion_studio.ui.widgets.marker_panel import MarkerPanel
-from ganglion_studio.ui.widgets.psd_widget import PSDWidget
-from ganglion_studio.ui.widgets.spectrogram_widget import SpectrogramWidget
-from ganglion_studio.ui.widgets.stats_panel import StatsPanel
-from ganglion_studio.ui.widgets.time_series import TimeSeriesWidget
+# Plot tabs (central tab area) live in ui/plots/; side panels in ui/panels/.
+from ganglion_studio.ui.plots.band_power_widget import BandPowerWidget
+from ganglion_studio.ui.plots.impedance_widget import ImpedanceWidget
+from ganglion_studio.ui.plots.psd_widget import PSDWidget
+from ganglion_studio.ui.plots.spectrogram_widget import SpectrogramWidget
+from ganglion_studio.ui.plots.time_series_widget import TimeSeriesWidget
+from ganglion_studio.ui.panels.channel_panel import ChannelPanel
+from ganglion_studio.ui.panels.filter_panel import FilterPanel
+from ganglion_studio.ui.panels.marker_panel import MarkerPanel
+from ganglion_studio.ui.panels.stats_panel import StatsPanel
 
 
 @runtime_checkable

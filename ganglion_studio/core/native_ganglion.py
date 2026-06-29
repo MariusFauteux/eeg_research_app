@@ -111,7 +111,7 @@ class GanglionDecoder:
     ``NUM_EEG`` microvolt floats (0 for a non-EEG packet, 2 for a delta packet,
     1 for the rare uncompressed anchor).
 
-    Protocol facts verified against real hardware (see native_raw_dump.py):
+    Protocol facts verified against real hardware (see tools/native_raw_dump.py):
       * byte[0] is a sample counter. With the accelerometer OFF (the app sends
         'N') it runs 100..199 and wraps 199->100 -- exactly 200 samples = 1 s.
       * Each packet carries 2 samples x 4 channels = 8 signed 19-bit deltas,

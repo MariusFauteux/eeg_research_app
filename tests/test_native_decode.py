@@ -5,7 +5,7 @@ final test replays 10 *real* packets captured from a Ganglion (Ch1 held against
 mains) and asserts the exact reconstructed counts -- a regression lock on the
 field layout, sign, and channel order derived from that capture.
 
-Protocol (verified against hardware, see native_raw_dump.py): pure 19-bit deltas,
+Protocol (verified against hardware, see tools/native_raw_dump.py): pure 19-bit deltas,
 2 samples x 4 channels per packet, counter 100..199 wrapping 199->100 (no
 periodic anchor). The decoder integrates from zero and holds flat on a genuine
 packet gap (the fix for BrainFlow's once-per-second pulse).
