@@ -31,6 +31,7 @@ from ganglion_studio.ui.review_window import ReviewWindow
 from ganglion_studio.ui.plots.band_power_widget import BandPowerWidget
 from ganglion_studio.ui.plots.impedance_widget import ImpedanceWidget
 from ganglion_studio.ui.plots.psd_widget import PSDWidget
+from ganglion_studio.ui.plots.pulse_diagnostics_widget import PulseDiagnosticsWidget
 from ganglion_studio.ui.plots.spectrogram_widget import SpectrogramWidget
 from ganglion_studio.ui.plots.time_series_widget import TimeSeriesWidget
 from ganglion_studio.ui.panels.channel_panel import ChannelPanel
@@ -183,12 +184,14 @@ class SessionView(QWidget):
         self.spectrogram = SpectrogramWidget(self._manager)
         self.impedance = ImpedanceWidget(self._manager)
         self.band_power = BandPowerWidget(self._manager)
+        self.diagnostics = PulseDiagnosticsWidget(self._manager)
 
         self.tabs.addTab(self.time_series, "Time Series")
         self.tabs.addTab(self.psd, "PSD")
         self.tabs.addTab(self.spectrogram, "Spectrogram / FFT")
         self.tabs.addTab(self.impedance, "Impedance")
         self.tabs.addTab(self.band_power, "Band Power")
+        self.tabs.addTab(self.diagnostics, "Diagnostics")
         return self.tabs
 
     def _build_right_panel(self) -> QWidget:
@@ -263,7 +266,7 @@ class SessionView(QWidget):
             names, dialog.types(), dialog.electrodes(), dialog.placements()
         )
         for widget in (self.time_series, self.psd, self.spectrogram, self.impedance,
-                       self.stats_panel, self.channel_panel):
+                       self.stats_panel, self.channel_panel, self.diagnostics):
             if hasattr(widget, "set_channel_names"):
                 widget.set_channel_names(names)
 
