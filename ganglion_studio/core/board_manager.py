@@ -52,6 +52,9 @@ class BoardManager:
     # native backend (BrainFlow's injects a once-per-second pulse). Ignored for
     # demo and dongle modes. See core/native_ganglion.py.
     use_custom_native: bool = True
+    # Native-BLE sample encoding: "delta" (firmware <= 2.x) or "msb" (firmware
+    # 3.0.2+, which sends absolute MSB-truncated samples). Custom native only.
+    decode_mode: str = "delta"
     buffer_seconds: float = 30.0
 
     # --- runtime state (not constructor args) ---
@@ -85,6 +88,13 @@ class BoardManager:
     recording: bool = field(default=False, init=False)
     _record_chunks: List[np.ndarray] = field(default_factory=list, init=False)
     _record_count: int = field(default=0, init=False)
+
+    # BLE packet-loss tracking (native driver only; stays 0 for demo/dongle). The
+    # loss ring is 1-D and aligned column-for-column with the data ring, so a drop
+    # can be placed exactly on the trace and saved alongside a recording.
+    _loss_ring: Optional[np.ndarray] = field(default=None, init=False)
+    _dropped_total: int = field(default=0, init=False)
+    _record_loss_idx: List[int] = field(default_factory=list, init=False)
 
     # demo impedance simulation state
     _demo_imp: Optional[np.ndarray] = field(default=None, init=False)
@@ -163,6 +173,7 @@ class BoardManager:
                 eeg_channels=self.eeg_channels,
                 timestamp_channel=self.timestamp_channel,
                 marker_channel=self.marker_channel,
+                decode_mode=self.decode_mode,
             )
             self.board.prepare_session()
         else:
@@ -172,8 +183,10 @@ class BoardManager:
 
         self._buffer_len = max(1, int(self.buffer_seconds * self.sampling_rate))
         self._ring = np.zeros((self.num_rows, self._buffer_len), dtype=np.float64)
+        self._loss_ring = np.zeros(self._buffer_len, dtype=np.float64)
         self._filled = 0
         self._write = 0
+        self._dropped_total = 0
         self._demo_imp = np.random.uniform(3.0, 25.0, size=len(self.eeg_channels))
         logger.info("Board prepared: id=%s sr=%s", self.board_id, self.sampling_rate)
 
@@ -248,34 +261,64 @@ class BoardManager:
         if self.demo:
             data = self._inject_demo_resistance(data)
 
+        # Per-sample BLE-loss flags aligned with `data` (native driver only).
+        loss = self._loss_flags(n)
+
         with self._lock:
+            self._dropped_total += int(loss.sum())
             if self.recording:
+                drops = np.flatnonzero(loss)
+                if drops.size:
+                    self._record_loss_idx.extend((self._record_count + drops).tolist())
                 self._record_chunks.append(data.copy())
                 self._record_count += n
-            self._append_ring(data)
+            self._append_ring(data, loss)
         return n
 
-    def _append_ring(self, data: np.ndarray) -> None:
-        """Append new columns to the circular ring buffer (O(n), no shifting)."""
+    def _loss_flags(self, n: int) -> np.ndarray:
+        """Loss-flag array (length n) for the just-polled chunk; zeros unless the
+        native driver reported drops aligned with this exact chunk."""
+        flags = getattr(self.board, "last_loss", None)
+        if flags is None or len(flags) != n:
+            return np.zeros(n, dtype=np.float64)
+        return np.asarray(flags, dtype=np.float64)
+
+    def _append_ring(self, data: np.ndarray, loss: Optional[np.ndarray] = None) -> None:
+        """Append new columns to the circular ring buffer (O(n), no shifting).
+
+        The 1-D ``loss`` array (defaulting to zeros) is written to ``_loss_ring`` at
+        the same indices, so the two rings stay aligned and ``recent`` /
+        ``recent_loss`` agree. Skipped when no loss ring is allocated.
+        """
         assert self._ring is not None
         length = self._buffer_len
         rows = min(data.shape[0], self._ring.shape[0])
         n = data.shape[1]
         if n <= 0:
             return
+        if loss is None:
+            loss = np.zeros(n, dtype=np.float64)
+        track = self._loss_ring is not None
         if n >= length:
             # New chunk alone overfills the buffer: keep only its last `length`.
             self._ring[:rows, :] = data[:rows, -length:]
+            if track:
+                self._loss_ring[:] = loss[-length:]
             self._write = 0
             self._filled = length
             return
         end = self._write + n
         if end <= length:
             self._ring[:rows, self._write:end] = data[:rows, :]
+            if track:
+                self._loss_ring[self._write:end] = loss
         else:  # chunk wraps past the buffer end
             first = length - self._write
             self._ring[:rows, self._write:] = data[:rows, :first]
             self._ring[:rows, : n - first] = data[:rows, first:]
+            if track:
+                self._loss_ring[self._write:] = loss[:first]
+                self._loss_ring[: n - first] = loss[first:]
         self._write = end % length
         self._filled = min(length, self._filled + n)
 
@@ -323,6 +366,40 @@ class BoardManager:
         row = data[self.marker_channel, :]
         idx = np.flatnonzero(row != 0)
         return idx, row[idx]
+
+    # ------------------------------------------------------- signal quality
+    def recent_loss(self, seconds: float) -> np.ndarray:
+        """BLE-loss flags (1.0 at each dropped packet) for the recent window,
+        column-aligned with :meth:`recent`. Use ``flatnonzero`` for drop indices."""
+        with self._lock:
+            if self._loss_ring is None or self._filled == 0:
+                return np.zeros(0, dtype=np.float64)
+            length = self._buffer_len
+            count = min(self._filled, max(1, int(seconds * self.sampling_rate)))
+            end = self._write
+            start = (end - count) % length
+            if start < end:
+                return self._loss_ring[start:end].copy()
+            return np.concatenate((self._loss_ring[start:], self._loss_ring[:end]))
+
+    def loss_rate(self, window: float = 10.0) -> float:
+        """Dropped packets per second over the most recent ``window`` seconds.
+
+        Divided by the nominal ``window`` (not the data actually buffered) so the
+        reading converges up as the window fills instead of spiking to a false
+        "poor" in the first second or two of a session.
+        """
+        return float(self.recent_loss(window).sum()) / max(window, 1e-6)
+
+    def dropped_packets(self) -> int:
+        """Total BLE packets lost this session (native driver only; 0 otherwise)."""
+        return int(self._dropped_total)
+
+    def recorded_loss_indices(self) -> List[int]:
+        """Sample indices (within the current/last recording) where a packet was
+        lost. Saved alongside the recording so the gaps can be handled offline."""
+        with self._lock:
+            return list(self._record_loss_idx)
 
     def latest_impedance_kohm(self) -> List[float]:
         """Latest impedance (kOhm) per EEG channel, or -1.0 if not measured yet.
@@ -397,6 +474,7 @@ class BoardManager:
         with self._lock:
             self._record_chunks = []
             self._record_count = 0
+            self._record_loss_idx = []
             self.recording = True
 
     def stop_recording(self) -> np.ndarray:

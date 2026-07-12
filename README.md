@@ -117,6 +117,15 @@ Requires Python 3.10+.
 pip install -r requirements.txt
 ```
 
+This installs everything (including the optional export/processing libraries).
+Alternatively, install the package itself to also get the `ganglion-studio`
+command, and pick optional extras explicitly:
+
+```bash
+pip install -e .                       # core only, editable
+pip install -e ".[export,processing]"  # + research export + Processing Lab algorithms
+```
+
 On Linux you may also need Qt/BLE system libraries, e.g.:
 
 ```bash
@@ -167,20 +176,39 @@ python -m ganglion_studio.main
 
 ```
 ganglion_studio/
-  main.py                 # entry point
-  core/
-    board_manager.py      # BrainFlow BoardShim wrapper, ring buffer, commands, recording
-    board_config.py       # Ganglion ASCII command map, colours, impedance thresholds
-    ble_scanner.py        # native BLE discovery (bleak)
-    dsp.py                # filters, PSD, FFT, spectrogram, band powers, quality metrics
-    session.py            # session config + recorder/exporter
-  ui/
-    main_window.py        # dashboard <-> session stack, async board prepare
-    dashboard.py          # scan + session setup
-    session_view.py       # toolbar, panels, plot tabs, refresh timer
-    theme.py              # dark theme
-    widgets/              # time_series, psd, spectrogram, impedance, band_power,
-                          # channel_panel, filter_panel, marker_panel
+  main.py                  # entry point (python -m ganglion_studio.main)
+  palette.py               # every colour the app uses, named in one place
+  core/                    # no GUI: hardware, signal processing, files
+    board_manager.py       # BrainFlow BoardShim wrapper, ring buffer, commands, recording
+    board_config.py        # Ganglion ASCII commands, channel/electrode types, impedance thresholds
+    native_ganglion.py     # custom bleak native-BLE driver (delta/MSB decode, packet loss)
+    ble_scanner.py         # native BLE discovery (bleak), run in a helper subprocess
+    serial_ports.py        # BLED112 dongle serial-port discovery
+    saved_devices.py       # remembered device list (name + address)
+    dsp.py                 # filters, PSD, FFT, spectrogram, band powers, quality metrics
+    session.py             # session config + live recorder (raw CSV / meta / markers / EDF)
+    recording_loader.py    # load a saved recording (CSV+meta or MNE format) -> LoadedRecording
+    processing.py          # offline pipeline (CAR, detrend, filters, wavelet, ASR, ECG-AAS)
+    analysis.py            # report figures + channel/pair metrics (matplotlib)
+    exporter.py            # save/export .fif / .set / .edf (+ best-effort .gdf)
+  ui/                      # PyQt6 windows and widgets (core never imports ui)
+    main_window.py         # dashboard <-> session stack, async board prepare
+    dashboard.py           # scan + session setup
+    session_view.py        # toolbar, panels, plot tabs, refresh timer
+    channel_setup_dialog.py# per-channel type / electrode / 10-20 placement + montage presets
+    review_window.py       # post-recording browse + marker edit + export
+    processing_window.py   # Processing Lab (original vs processed, pipeline controls)
+    analysis_window.py     # tabbed analysis / electrode-characterization report
+    theme.py               # dark theme
+    plots/                 # plot tabs (PlotTab contract): time_series, psd, spectrogram,
+                           #   impedance, band_power
+    panels/                # side-column controls: channel, filter, stats, marker
+
+tools/                     # hardware / debug scripts (diagnose_artifact, native_raw_dump,
+                           #   native_stream_check) -- not needed to run the app
+tests/                     # unit tests (python -m pytest tests/ -q)
+smoke_test.py              # headless end-to-end check (QT_QPA_PLATFORM=offscreen)
+docs/                      # ARCHITECTURE.md, EXTENDING.md
 ```
 
 ## Ideas / possible add-ons

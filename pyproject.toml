@@ -1,0 +1,49 @@
+# Packaging + tooling config for Ganglion EEG Studio.
+#
+# requirements.txt remains the simple "install everything" path used by the
+# README and CI (`pip install -r requirements.txt`). This file additionally
+# declares the package so it can be installed (`pip install -e .`), exposes the
+# `ganglion-studio` command, splits the optional dependencies into named extras,
+# and holds the pytest configuration (which replaces the old root conftest.py).
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ganglion-studio"
+version = "1.0.0"
+description = "Interactive control & visualization for the OpenBCI Ganglion EEG board."
+readme = "README.md"
+requires-python = ">=3.10"
+
+# Core runtime dependencies (kept in sync with the top of requirements.txt).
+dependencies = [
+    "brainflow>=5.22",
+    "PyQt6>=6.6",
+    "pyqtgraph>=0.13",
+    "bleak>=0.21",
+    "pyserial>=3.5",
+    "numpy>=1.24",
+    "scipy>=1.10",
+]
+
+[project.optional-dependencies]
+# Recording review/export to research formats (.fif/.set/.edf).
+export = ["mne>=1.5", "eeglabio>=0.0.2", "edfio>=0.4"]
+# Processing Lab algorithms (ASR, ECG R-peak detection for AAS).
+processing = ["meegkit>=0.1.7", "neurokit2>=0.2"]
+# Development / testing only.
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+ganglion-studio = "ganglion_studio.main:main"
+
+[tool.setuptools.packages.find]
+include = ["ganglion_studio*"]
+
+[tool.pytest.ini_options]
+# Put the repo root on sys.path so `import ganglion_studio` resolves without an
+# installed/src layout (previously done by a comment-only root conftest.py).
+pythonpath = ["."]
+testpaths = ["tests"]

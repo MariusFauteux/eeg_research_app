@@ -4,10 +4,10 @@ A/B tool: stream N seconds straight from :class:`NativeGanglionClient`, save a
 raw CSV + meta in the exact format ``diagnose_artifact.py`` expects, so you can
 confirm the once-per-second pulse is gone *before* switching the app over.
 
-Usage
------
-    .venv/bin/python native_stream_check.py <ble-address-or-uuid> [--seconds 60]
-    .venv/bin/python native_stream_check.py <addr> --out recordings/native_check/run1
+Usage (run from the repo root)
+-------------------------------
+    .venv/bin/python tools/native_stream_check.py <ble-address-or-uuid> [--seconds 60]
+    .venv/bin/python tools/native_stream_check.py <addr> --out recordings/native_check/run1
 
 Get <ble-address-or-uuid> from the app's Scan list (on macOS it is a
 CoreBluetooth UUID, on Linux/Windows a MAC). Then run the diagnosis the script
@@ -19,8 +19,14 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 import time
 from datetime import datetime
+
+# This script lives in tools/ but imports the ganglion_studio package; put the
+# repo root (the parent of tools/) on sys.path so `import ganglion_studio` works
+# when run directly without installing the package.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 from brainflow.board_shim import BoardIds, BoardShim
@@ -93,7 +99,7 @@ def main() -> None:
         )
 
     print(f"\nWrote:\n  {csv_path}\n  {meta_path}")
-    print(f"\nNow diagnose the pulse:\n  .venv/bin/python diagnose_artifact.py {csv_path}")
+    print(f"\nNow diagnose the pulse:\n  .venv/bin/python tools/diagnose_artifact.py {csv_path}")
 
 
 if __name__ == "__main__":

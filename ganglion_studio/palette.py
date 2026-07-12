@@ -44,6 +44,9 @@ ELECTRODE_COLORS = {
     "Ag/AgCl (dry)": GOOD,
     "PEDOT:PSS": BAD,
     "PEDOT": "#e2722c",
+    "mc15": "#b085f5",       # purple
+    "commercial": "#4fd0e0",  # cyan
+    "semiwet": "#f2a1c0",     # pink
     "Other": MUTED,
 }
 

@@ -48,12 +48,13 @@ markers, timestamp…). A dedicated background thread calls `poll()` (the single
 `recent()` / `recent_eeg()`. A lock keeps the producer and the GUI readers safe.
 The accelerometer is disabled on start so the Ganglion streams 19-bit EEG.
 
-### Live view (`ui/session_view.py` + `ui/widgets/`)
-`SessionView` builds the toolbar, the left side-panels (channels, filters, live
-stats) and the **plot tabs**. A `QTimer` tick renders only the *visible* tab,
-throttled to that tab's `refresh_hz`. Every tab follows the small `PlotTab`
-contract (`update_plot`, optional `refresh_hz` / `set_channel_names`) documented
-at the top of `session_view.py`.
+### Live view (`ui/session_view.py` + `ui/plots/` + `ui/panels/`)
+`SessionView` builds the toolbar, the side **panels** (`ui/panels/`: channels,
+filters, live stats, markers) and the central **plot tabs** (`ui/plots/`:
+time series, PSD, spectrogram, impedance, band power). A `QTimer` tick renders
+only the *visible* tab, throttled to that tab's `refresh_hz`. Every tab follows
+the small `PlotTab` contract (`update_plot`, optional `refresh_hz` /
+`set_channel_names`) documented at the top of `session_view.py`.
 
 ### Display vs. recording (important)
 Filters in the UI are **display only**. Recording always stores the *raw*

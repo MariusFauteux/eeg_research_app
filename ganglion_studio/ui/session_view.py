@@ -27,15 +27,17 @@ from ganglion_studio.core.session import MarkerEvent, SessionConfig, SessionReco
 from ganglion_studio.ui import theme
 from ganglion_studio.ui.channel_setup_dialog import ChannelSetupDialog
 from ganglion_studio.ui.review_window import ReviewWindow
-from ganglion_studio.ui.widgets.band_power_widget import BandPowerWidget
-from ganglion_studio.ui.widgets.channel_panel import ChannelPanel
-from ganglion_studio.ui.widgets.filter_panel import FilterPanel
-from ganglion_studio.ui.widgets.impedance_widget import ImpedanceWidget
-from ganglion_studio.ui.widgets.marker_panel import MarkerPanel
-from ganglion_studio.ui.widgets.psd_widget import PSDWidget
-from ganglion_studio.ui.widgets.spectrogram_widget import SpectrogramWidget
-from ganglion_studio.ui.widgets.stats_panel import StatsPanel
-from ganglion_studio.ui.widgets.time_series import TimeSeriesWidget
+# Plot tabs (central tab area) live in ui/plots/; side panels in ui/panels/.
+from ganglion_studio.ui.plots.band_power_widget import BandPowerWidget
+from ganglion_studio.ui.plots.impedance_widget import ImpedanceWidget
+from ganglion_studio.ui.plots.psd_widget import PSDWidget
+from ganglion_studio.ui.plots.pulse_diagnostics_widget import PulseDiagnosticsWidget
+from ganglion_studio.ui.plots.spectrogram_widget import SpectrogramWidget
+from ganglion_studio.ui.plots.time_series_widget import TimeSeriesWidget
+from ganglion_studio.ui.panels.channel_panel import ChannelPanel
+from ganglion_studio.ui.panels.filter_panel import FilterPanel
+from ganglion_studio.ui.panels.marker_panel import MarkerPanel
+from ganglion_studio.ui.panels.stats_panel import StatsPanel
 
 
 @runtime_checkable
@@ -182,12 +184,14 @@ class SessionView(QWidget):
         self.spectrogram = SpectrogramWidget(self._manager)
         self.impedance = ImpedanceWidget(self._manager)
         self.band_power = BandPowerWidget(self._manager)
+        self.diagnostics = PulseDiagnosticsWidget(self._manager)
 
         self.tabs.addTab(self.time_series, "Time Series")
         self.tabs.addTab(self.psd, "PSD")
         self.tabs.addTab(self.spectrogram, "Spectrogram / FFT")
         self.tabs.addTab(self.impedance, "Impedance")
         self.tabs.addTab(self.band_power, "Band Power")
+        self.tabs.addTab(self.diagnostics, "Diagnostics")
         return self.tabs
 
     def _build_right_panel(self) -> QWidget:
@@ -262,7 +266,7 @@ class SessionView(QWidget):
             names, dialog.types(), dialog.electrodes(), dialog.placements()
         )
         for widget in (self.time_series, self.psd, self.spectrogram, self.impedance,
-                       self.stats_panel, self.channel_panel):
+                       self.stats_panel, self.channel_panel, self.diagnostics):
             if hasattr(widget, "set_channel_names"):
                 widget.set_channel_names(names)
 
@@ -288,20 +292,26 @@ class SessionView(QWidget):
         if self._recorder is None:
             return
         raw = self._manager.stop_recording()
+        loss_samples = self._manager.recorded_loss_indices()
         n_eeg = len(self._manager.eeg_channels)
         meta = {
             "sampling_rate": self._manager.sampling_rate,
             "board_id": self._manager.board_id,
             "eeg_channels": self._manager.eeg_channels,
             "channel_names": list(self._manager.channel_names[:n_eeg]),
+            # Which channels were streaming when recorded. A False channel was
+            # switched off (board sends 0.00 -> a flat-zero column), so on reload
+            # it can be told apart from a channel that was on but died/flat-lined.
+            "channel_active": list(self._manager.channel_active[:n_eeg]),
             "channel_types": list(self._manager.channel_types[:n_eeg]),
             "electrodes": list(self._manager.electrodes[:n_eeg]),
             "placements": list(self._manager.placements[:n_eeg]),
             "marker_channel": self._manager.marker_channel,
+            "timestamp_channel": self._manager.timestamp_channel,
             "notch_freq": self._config.notch_freq,
         }
-        # Always keep the lossless backup (CSV + meta + marker log).
-        self._recorder.save(raw, meta)
+        # Always keep the lossless backup (CSV + meta + marker + packet-loss log).
+        self._recorder.save(raw, meta, loss_samples=loss_samples)
         self._recorder = None
 
         if raw is None or raw.ndim != 2 or raw.shape[1] == 0:
@@ -311,7 +321,8 @@ class SessionView(QWidget):
         # Open the review window so the user can browse, edit markers and export.
         types = list(getattr(self.marker_panel, "_types", []))
         code_labels = {mt.code: mt.label for mt in types}
-        review = ReviewWindow(raw, meta, code_labels, types, title=self._config.name)
+        review = ReviewWindow(raw, meta, code_labels, types, title=self._config.name,
+                              loss_samples=loss_samples)
         review.show()
         self._reviews.append(review)
 

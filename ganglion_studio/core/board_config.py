@@ -35,7 +35,8 @@ DEFAULT_CHANNEL_NAMES = ["Ch1", "Ch2", "Ch3", "Ch4"]
 # Single source of truth: core.analysis re-exports these so the live Channel
 # Setup dialog and the Processing Lab always offer identical options.
 CHANNEL_TYPES = ["EEG", "ECG", "EMG", "MISC"]
-ELECTRODES = ["Ag/AgCl (wet)", "Ag/AgCl (dry)", "PEDOT:PSS", "PEDOT", "Other"]
+ELECTRODES = ["Ag/AgCl (wet)", "Ag/AgCl (dry)", "PEDOT:PSS", "PEDOT",
+              "mc15", "commercial", "semiwet", "Other"]
 
 # Standard 10-20 electrode placements (plus references / unset).
 TEN_TWENTY = [

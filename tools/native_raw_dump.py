@@ -10,7 +10,7 @@ macOS -- no subprocess needed.
 
 Usage
 -----
-    .venv/bin/python native_raw_dump.py <ble-address-or-uuid> [--seconds 6] [--accel-off]
+    .venv/bin/python tools/native_raw_dump.py <ble-address-or-uuid> [--seconds 6] [--accel-off]
 
 It prints the byte[0] (packet-id) histogram and the first 40 packets in hex, and
 saves every captured packet to native_raw_dump.txt (one hex packet per line).

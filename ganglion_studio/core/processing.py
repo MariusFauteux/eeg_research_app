@@ -25,7 +25,7 @@ from brainflow.data_filter import (
     WaveletTypes,
 )
 
-from .dsp import FilterSettings, apply_filters
+from .dsp import FilterSettings, apply_filters, interpolate_gaps
 
 WAVELETS = ["DB4", "DB6", "DB8", "SYM4", "SYM5", "COIF3", "BIOR3_9", "HAAR"]
 
@@ -84,6 +84,11 @@ class AasStepConfig:
 
 @dataclass
 class ProcessingConfig:
+    # Repair native-BLE packet-loss seams (interpolate the held-flat samples) BEFORE
+    # anything else, so the band-pass downstream never rings on them. loss_samples
+    # are the drop sample-indices saved with the recording (_packet_loss.csv).
+    repair_gaps: bool = False
+    loss_samples: List[int] = field(default_factory=list)
     reref_car: bool = False
     detrend: str = "none"  # none / constant / linear
     filters: FilterStepConfig = field(default_factory=FilterStepConfig)
@@ -263,6 +268,16 @@ def apply_pipeline(eeg: np.ndarray, sampling_rate: int, ch_names: List[str],
     if eeg is None or eeg.ndim != 2 or eeg.shape[1] == 0:
         return eeg, ["No data to process."]
     data = np.ascontiguousarray(eeg, dtype=np.float64).copy()
+
+    # Packet-loss repair FIRST: interpolate the held-flat samples at each saved
+    # drop index so the steps never reach the filter (and never get spread by CAR).
+    if config.repair_gaps and config.loss_samples:
+        bad = np.zeros(data.shape[1], dtype=bool)
+        for idx in config.loss_samples:
+            bad[idx:idx + 2] = True   # the 2 held-flat samples of a dropped packet
+        for ch in range(data.shape[0]):
+            data[ch] = interpolate_gaps(data[ch], bad)
+        messages.append(f"Repaired {len(config.loss_samples)} packet-loss gaps (interpolated)")
 
     # Common Average Reference (CAR): subtract the across-channel mean so noise
     # shared by all electrodes (e.g. reference drift) cancels out.

@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import (
 from ganglion_studio.core.board_manager import BoardManager
 from ganglion_studio.core.session import SessionConfig
 from ganglion_studio.ui.dashboard import Dashboard
+from ganglion_studio.ui.fif_editor_window import RecordingEditorWindow
 from ganglion_studio.ui.processing_window import ProcessingWindow
 from ganglion_studio.ui.session_view import SessionView
 
@@ -50,6 +51,7 @@ class MainWindow(QMainWindow):
         self.dashboard = Dashboard()
         self.dashboard.start_session.connect(self._on_start_session)
         self.dashboard.open_processing.connect(self._open_processing_lab)
+        self.dashboard.open_editor.connect(self._open_editor)
         self.stack.addWidget(self.dashboard)
 
         self.session_view: Optional[SessionView] = None
@@ -58,12 +60,19 @@ class MainWindow(QMainWindow):
         self._progress: Optional[QProgressDialog] = None
         self._pending_config: Optional[SessionConfig] = None
         self._processing_windows: list[ProcessingWindow] = []
+        self._editor_windows: list[RecordingEditorWindow] = []
 
     def _open_processing_lab(self) -> None:
         window = ProcessingWindow()
         window.show()
         window.raise_()
         self._processing_windows.append(window)
+
+    def _open_editor(self) -> None:
+        window = RecordingEditorWindow()
+        window.show()
+        window.raise_()
+        self._editor_windows.append(window)
 
     def _on_start_session(self, config: SessionConfig) -> None:
         self._pending_config = config
@@ -73,6 +82,7 @@ class MainWindow(QMainWindow):
             serial_port=config.serial_port,
             firmware=config.firmware,
             use_custom_native=config.use_custom_native,
+            decode_mode=config.decode_mode,
         )
         self._progress = QProgressDialog(
             "Connecting to the board..." if not config.demo else "Starting demo board...",
@@ -127,5 +137,7 @@ class MainWindow(QMainWindow):
         if self.manager is not None:
             self.manager.release()
         for window in self._processing_windows:
+            window.close()
+        for window in self._editor_windows:
             window.close()
         super().closeEvent(event)

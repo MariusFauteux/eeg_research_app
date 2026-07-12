@@ -1,10 +1,26 @@
-name: Build Qt Executables
+name: Build and Release
 
+# Releases are cut by pushing a version tag, e.g.:
+#   git tag v0.1.0
+#   git push origin v0.1.0
+# That builds the app on Linux, Windows, and macOS and publishes a GitHub
+# Release with the three downloadable archives attached.
+#
+# You can also trigger a build manually from the Actions tab ("Run workflow").
+# Manual runs build the executables but do NOT create a release (no tag).
 on:
   push:
-    branches:
-      - main
+    tags:
+      - "v*"
   workflow_dispatch:
+
+# The release job needs write access to create the GitHub Release.
+permissions:
+  contents: write
+
+env:
+  APP_NAME: "GanglionEEGStudio"
+  ENTRY_POINT: "ganglion_studio/main.py"
 
 jobs:
   build:
@@ -12,34 +28,76 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-
     runs-on: ${{ matrix.os }}
-
-    env:
-      MAIN_PY_FILE: "main.py"    # adjust if your entry point is different
-      APP_NAME: "MyQtApp"        # change to your app’s name
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
       - name: Install dependencies
         run: |
+          python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pyinstaller
 
       - name: Build executable with PyInstaller
+        shell: bash
         run: |
-          pyinstaller --name "$APP_NAME" --windowed "$MAIN_PY_FILE"
+          # --paths .            put the repo root on sys.path so the
+          #                      "from ganglion_studio..." imports resolve.
+          # --collect-all ...    bundle the native libraries / data files these
+          #                      packages ship; PyInstaller misses them otherwise
+          #                      and the app crashes on launch.
+          pyinstaller --noconfirm --windowed \
+            --name "$APP_NAME" \
+            --paths . \
+            --collect-all brainflow \
+            --collect-all pyqtgraph \
+            "$ENTRY_POINT"
           ls -R dist
 
-      - name: Upload artifact
+      # Archive the build before uploading. This both keeps the release assets
+      # to one file per platform AND preserves the executable's +x permission
+      # bit, which upload-artifact would otherwise strip on Linux/macOS.
+      - name: Package (Linux / macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: tar -czf "${APP_NAME}-${{ runner.os }}.tar.gz" -C dist .
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path dist/* -DestinationPath "$env:APP_NAME-Windows.zip"
+
+      - name: Upload build archive
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.os }}-build
-          path: dist/
+          name: ${{ runner.os }}-build
+          path: |
+            ${{ env.APP_NAME }}-*.tar.gz
+            ${{ env.APP_NAME }}-*.zip
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    # Only publish a release for tag pushes; manual runs just build.
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    steps:
+      - name: Download all build archives
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          generate_release_notes: true
