@@ -10,7 +10,7 @@ import csv
 import json
 import os
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import numpy as np
 
@@ -33,6 +33,11 @@ class LoadedRecording:
     source_path: str = ""
     channel_types: List[str] = field(default_factory=list)
     electrodes: List[str] = field(default_factory=list)
+    # Per-channel 10-20 placement (from meta.json). Empty when unknown.
+    placements: List[str] = field(default_factory=list)
+    # Per-channel on/off state at record time (from meta.json). Empty when the
+    # recording predates this field; a False channel was switched off (flat zero).
+    channel_active: List[bool] = field(default_factory=list)
     # Sample indices where native BLE dropped a packet (from _packet_loss.csv).
     loss_samples: List[int] = field(default_factory=list)
 
@@ -89,6 +94,32 @@ def _load_loss_samples(path: str) -> List[int]:
     return out
 
 
+def _load_marker_labels(path: str) -> Dict[int, str]:
+    """Read the sibling ``_markers.csv`` into a {code: label} map, if present.
+
+    The raw CSV's marker channel only stores the numeric code, so to recover the
+    human-readable name the user assigned we read it from the marker sidecar and
+    map code -> label (the same idea as the live view's marker types).
+    """
+    if path.endswith("_raw.csv"):
+        cand = path[: -len("_raw.csv")] + "_markers.csv"
+    else:
+        cand = os.path.splitext(path)[0] + "_markers.csv"
+    labels: Dict[int, str] = {}
+    if not os.path.exists(cand):
+        return labels
+    try:
+        with open(cand, newline="", encoding="utf-8") as fh:
+            reader = csv.DictReader(fh)  # header: timestamp,time,code,label
+            for row in reader:
+                label = (row.get("label") or "").strip()
+                if label:
+                    labels[int(float(row["code"]))] = label
+    except Exception:
+        return {}
+    return labels
+
+
 def _load_csv(path: str) -> LoadedRecording:
     try:
         data = DataFilter.read_file(path)
@@ -108,6 +139,7 @@ def _load_csv(path: str) -> LoadedRecording:
         marker_channel = int(meta.get("marker_channel", 0))
         ch_types = list(meta.get("channel_types", []))
         electrodes = list(meta.get("electrodes", []))
+        channel_active = list(meta.get("channel_active", []))
     else:
         # No metadata: assume a Ganglion layout.
         bid = BoardIds.GANGLION_NATIVE_BOARD.value
@@ -118,21 +150,25 @@ def _load_csv(path: str) -> LoadedRecording:
         marker_channel = int(descr.get("marker_channel", 0))
         ch_types = []
         electrodes = []
+        channel_active = []
 
     eeg_rows = [r for r in eeg_rows if r < data.shape[0]]
     eeg = np.ascontiguousarray(data[eeg_rows, :], dtype=np.float64)
     names = names[: len(eeg_rows)] or [f"Ch{i + 1}" for i in range(eeg.shape[0])]
 
+    code_labels = _load_marker_labels(path)
     markers: List[ReviewMarker] = []
     if 0 <= marker_channel < data.shape[0]:
         row = data[marker_channel, :]
         for idx in np.flatnonzero(row != 0):
             code = int(row[idx])
-            markers.append(ReviewMarker(int(idx), code, f"code {code}"))
+            markers.append(ReviewMarker(int(idx), code,
+                                        code_labels.get(code, f"code {code}")))
 
     return LoadedRecording(eeg, sr, names, markers, path,
                            channel_types=ch_types[: len(eeg_rows)],
                            electrodes=electrodes[: len(eeg_rows)],
+                           channel_active=channel_active[: len(eeg_rows)],
                            loss_samples=_load_loss_samples(path))
 
 
@@ -169,4 +205,30 @@ def _load_mne(path: str) -> LoadedRecording:
         sample = int(round(ann["onset"] * sr))
         markers.append(ReviewMarker(sample, 0, str(ann["description"])))
 
-    return LoadedRecording(eeg, sr, names, markers, path)
+    # If the Recording Editor previously saved this file, a sibling _meta.json
+    # holds the channel edits (type / electrode / placement / name) that .fif
+    # itself cannot store. Read them back so a re-opened file shows the edits.
+    ch_types: List[str] = []
+    electrodes: List[str] = []
+    placements: List[str] = []
+    channel_active: List[bool] = []
+    meta_path = _meta_path_for(path)
+    if meta_path:
+        try:
+            with open(meta_path, "r", encoding="utf-8") as fh:
+                meta = json.load(fh)
+            saved_names = list(meta.get("channel_names", []))
+            if len(saved_names) == len(names):
+                names = saved_names
+            ch_types = list(meta.get("channel_types", []))[: len(names)]
+            electrodes = list(meta.get("electrodes", []))[: len(names)]
+            placements = list(meta.get("placements", []))[: len(names)]
+            channel_active = list(meta.get("channel_active", []))[: len(names)]
+        except Exception:
+            pass
+
+    return LoadedRecording(eeg, sr, names, markers, path,
+                           channel_types=ch_types,
+                           electrodes=electrodes,
+                           placements=placements,
+                           channel_active=channel_active)

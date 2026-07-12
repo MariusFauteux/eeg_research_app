@@ -36,6 +36,12 @@ from ganglion_studio.core.recording_loader import LoadError, LoadedRecording, lo
 from ganglion_studio.ui.analysis_window import AnalysisWindow
 from ganglion_studio.ui import theme
 
+# Marker / packet-drop overlays are each drawn as one curve item whose vertical
+# ticks span this fixed (huge) y-extent, so a tick covers the full plot height
+# regardless of amplitude/zoom. Added with ignoreBounds=True so it never drags
+# auto-range.
+_OVERLAY_Y = 1e9
+
 
 class ProcessingWorker(QThread):
     done = pyqtSignal(object, list)
@@ -289,6 +295,19 @@ class ProcessingWindow(QWidget):
         bar.addWidget(QLabel("Amplitude"))
         self.amp_spin = self._dspin(1.0, 100000.0, 200.0, " uV", self._redraw_all)
         bar.addWidget(self.amp_spin)
+
+        self.markers_chk = QCheckBox("Markers")
+        self.markers_chk.setChecked(True)
+        self.markers_chk.setToolTip("Show the recording's event markers (dashed lines)")
+        self.markers_chk.toggled.connect(self._draw_overlays)
+        bar.addWidget(self.markers_chk)
+
+        self.loss_chk = QCheckBox("Packet drops")
+        self.loss_chk.setChecked(True)
+        self.loss_chk.setToolTip("Show native-Bluetooth packet drops (dotted lines)")
+        self.loss_chk.toggled.connect(self._draw_overlays)
+        bar.addWidget(self.loss_chk)
+
         bar.addStretch(1)
         layout.addLayout(bar)
 
@@ -300,6 +319,15 @@ class ProcessingWindow(QWidget):
         splitter.addWidget(self._proc_pw)
         splitter.setSizes([400, 400])
         layout.addWidget(splitter, 1)
+
+        # Event overlays drawn on both the original and processed views so the
+        # same instants line up against raw and cleaned signal. Packet drops are
+        # one curve item per plot (can be many, no labels); markers are labeled
+        # InfiniteLines (few), rebuilt in _draw_overlays with the label on the top
+        # plot only.
+        self._loss_curves = [self._overlay_curve(self._orig_plot, palette.OK, Qt.PenStyle.DotLine),
+                             self._overlay_curve(self._proc_plot, palette.OK, Qt.PenStyle.DotLine)]
+        self._marker_lines: List = []  # (line, plot) pairs
 
         self.scrollbar = QScrollBar(Qt.Orientation.Horizontal)
         self.scrollbar.valueChanged.connect(self._on_scroll)
@@ -317,6 +345,73 @@ class ProcessingWindow(QWidget):
         plot.setMouseEnabled(x=True, y=False)  # touchpad: scroll/pinch = zoom, drag = pan
         plot.setMenuEnabled(False)
         return pw, plot
+
+    # ----------------------------------------------------------- overlays
+    def _overlay_curve(self, plot, color, style):
+        """A curve item used to draw vertical event ticks on ``plot``."""
+        curve = pg.PlotCurveItem(pen=pg.mkPen(color, width=1, style=style))
+        plot.addItem(curve, ignoreBounds=True)  # never part of auto-range
+        return curve
+
+    def _event_xs(self, samples) -> np.ndarray:
+        """Sample indices -> x positions (seconds), clipped to the recording."""
+        if self._rec is None:
+            return np.zeros(0)
+        sr = self._rec.sampling_rate
+        n = self._rec.n_samples
+        return np.array([s / sr for s in samples if 0 <= s < n], dtype=float)
+
+    def _set_vlines(self, curve, xs: np.ndarray) -> None:
+        """Draw one full-height vertical tick per x as a single curve item:
+        repeat each x and pair it with a fixed y-span (connect="pairs")."""
+        if xs.size == 0:
+            curve.clear()
+            return
+        x = np.repeat(xs, 2)
+        y = np.tile([-_OVERLAY_Y, _OVERLAY_Y], xs.size)
+        curve.setData(x, y, connect="pairs")
+
+    def _draw_overlays(self, *_args) -> None:
+        """Refresh marker + packet-drop overlays on both plots (time view only)."""
+        psd = self.view_combo.currentText() == "PSD"
+        show = self._rec is not None and not psd
+        # Packet drops: efficient single-curve ticks (may be many, no labels).
+        loss_xs = (self._event_xs(self._rec.loss_samples)
+                   if show and self.loss_chk.isChecked() else np.zeros(0))
+        for c in self._loss_curves:
+            self._set_vlines(c, loss_xs)
+        # Markers: labeled dashed lines (few); rebuilt each refresh.
+        self._clear_marker_lines()
+        if show and self.markers_chk.isChecked():
+            self._draw_marker_lines()
+
+    def _clear_marker_lines(self) -> None:
+        for line, plot in self._marker_lines:
+            plot.removeItem(line)
+        self._marker_lines = []
+
+    def _draw_marker_lines(self) -> None:
+        """One dashed line per marker on both plots; label on the top plot only."""
+        sr = self._rec.sampling_rate
+        n = self._rec.n_samples
+        for m in self._rec.markers:
+            if not (0 <= m.sample < n):
+                continue
+            x = m.sample / sr
+            labeled = pg.InfiniteLine(
+                pos=x, angle=90, movable=False,
+                pen=pg.mkPen(palette.MARKER, width=1, style=Qt.PenStyle.DashLine),
+                label=m.label,
+                labelOpts={"position": 0.92, "color": palette.MARKER, "fill": "#00000080"},
+            )
+            self._orig_plot.addItem(labeled, ignoreBounds=True)
+            self._marker_lines.append((labeled, self._orig_plot))
+            plain = pg.InfiniteLine(
+                pos=x, angle=90, movable=False,
+                pen=pg.mkPen(palette.MARKER, width=1, style=Qt.PenStyle.DashLine),
+            )
+            self._proc_plot.addItem(plain, ignoreBounds=True)
+            self._marker_lines.append((plain, self._proc_plot))
 
     # --------------------------------------------------------------- load
     def _on_open(self) -> None:
@@ -545,6 +640,7 @@ class ProcessingWindow(QWidget):
             self._redraw(self._proc_plot, self._proc_curves, self._processed)
         self._configure_scrollbar()
         self._on_view_changed()
+        self._draw_overlays()
 
     def _redraw(self, plot, curves, data) -> None:
         if data is None or self._rec is None or data.shape[0] != len(curves):

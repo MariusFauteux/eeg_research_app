@@ -146,10 +146,30 @@ meta = {
     "notch_freq": 50,
 }
 review = ReviewWindow(raw, meta, code_labels={1: "Eyes Open", 3: "Stimulus"},
-                      marker_types=view.marker_panel._types, title="smoke")
+                      marker_types=view.marker_panel._types, title="smoke",
+                      loss_samples=[120, 350, 600])
 n0 = len(review._markers)
 print("review markers extracted:", n0)
 assert n0 >= 2, "marker extraction failed"
+
+
+def _nx(curve):
+    """Number of x points in a pyqtgraph curve (0 when cleared)."""
+    x = curve.getData()[0]
+    return 0 if x is None else len(x)
+
+
+# Marker + packet-drop overlays (Review window): 3 drops -> 3 vertical ticks
+# (2 points each); toggles hide markers / drops.
+assert review.drops_chk.isEnabled() and review.drops_chk.isChecked(), "drops toggle off"
+assert _nx(review._loss_curve) == 2 * 3, "packet-drop ticks not drawn"
+review.drops_chk.setChecked(False)
+assert _nx(review._loss_curve) == 0, "packet drops not hidden when toggled off"
+review.markers_chk.setChecked(False)
+assert not review._marker_lines, "markers not hidden when toggled off"
+review.markers_chk.setChecked(True)
+assert review._marker_lines, "markers not shown when toggled on"
+print("review overlays ok")
 
 # Add then remove a marker.
 review._click_time = 1.0
@@ -246,6 +266,27 @@ win._worker.wait(20000)
 app.processEvents()
 assert win._processed is not None and win._processed.shape == loaded.eeg.shape
 print("processing window recompute ok")
+
+# Marker + packet-drop overlays (Processing Lab): inject events and verify both
+# the original and processed plots get vertical ticks, that toggles hide them,
+# and that the PSD view suppresses them.
+from ganglion_studio.core.exporter import ReviewMarker as _RM
+win._rec.markers = [_RM(150, 1, "m"), _RM(650, 3, "m")]
+win._rec.loss_samples = [200, 500, 800]
+win._draw_overlays()
+# 2 markers x 2 plots = 4 lines; the label rides on the original (top) plot.
+assert len(win._marker_lines) == 2 * 2, "lab markers not drawn on both plots"
+orig_marks = [ln for ln, pl in win._marker_lines if pl is win._orig_plot]
+assert len(orig_marks) == 2 and all(getattr(ln.label, "format", None) == "m" for ln in orig_marks), \
+    "marker labels missing in Lab"
+assert all(_nx(c) == 2 * 3 for c in win._loss_curves), "lab packet drops not drawn on both plots"
+win.loss_chk.setChecked(False)
+assert all(_nx(c) == 0 for c in win._loss_curves), "lab packet drops not hidden when toggled off"
+win.view_combo.setCurrentText("PSD")
+assert win._marker_lines == [], "marker overlays not suppressed in PSD view"
+win.view_combo.setCurrentText("Time")
+assert len(win._marker_lines) == 2 * 2, "marker overlays not restored in time view"
+print("processing lab overlays ok")
 
 # Deactivate a channel: excluded from CAR active set and from analysis metas.
 win._enable_checks[1].setChecked(False)

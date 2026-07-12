@@ -1,0 +1,268 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="ALL" />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="f507cde0-44eb-45b0-9047-1ed0278b52d3" name="Changes" comment="">
+      <change afterPath="$PROJECT_DIR$/mne_data_raw/mc15_blinks_day2_raw.fif" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ganglion_studio/core/board_config.py" beforeDir="false" afterPath="$PROJECT_DIR$/ganglion_studio/core/board_config.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ganglion_studio/core/recording_loader.py" beforeDir="false" afterPath="$PROJECT_DIR$/ganglion_studio/core/recording_loader.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ganglion_studio/palette.py" beforeDir="false" afterPath="$PROJECT_DIR$/ganglion_studio/palette.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ganglion_studio/ui/dashboard.py" beforeDir="false" afterPath="$PROJECT_DIR$/ganglion_studio/ui/dashboard.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ganglion_studio/ui/main_window.py" beforeDir="false" afterPath="$PROJECT_DIR$/ganglion_studio/ui/main_window.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ganglion_studio/ui/processing_window.py" beforeDir="false" afterPath="$PROJECT_DIR$/ganglion_studio/ui/processing_window.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ganglion_studio/ui/review_window.py" beforeDir="false" afterPath="$PROJECT_DIR$/ganglion_studio/ui/review_window.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ganglion_studio/ui/session_view.py" beforeDir="false" afterPath="$PROJECT_DIR$/ganglion_studio/ui/session_view.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/smoke_test.py" beforeDir="false" afterPath="$PROJECT_DIR$/smoke_test.py" afterDir="false" />
+    </list>
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="EmbeddingIndexingInfo">
+    <option name="cachedIndexableFilesCount" value="432" />
+    <option name="fileBasedEmbeddingIndicesEnabled" value="true" />
+  </component>
+  <component name="FileTemplateManagerImpl">
+    <option name="RECENT_TEMPLATES">
+      <list>
+        <option value="Python Script" />
+      </list>
+    </option>
+  </component>
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+  </component>
+  <component name="GitHubPullRequestSearchHistory">{
+  &quot;lastFilter&quot;: {}
+}</component>
+  <component name="GithubPullRequestsUISettings">{
+  &quot;selectedUrlAndAccountId&quot;: {
+    &quot;url&quot;: &quot;https://github.com/MariusFauteux/eeg_research_app.git&quot;,
+    &quot;accountId&quot;: &quot;c918a9b7-72a9-42b8-9d0d-fe5998c9ba90&quot;
+  }
+}</component>
+  <component name="McpProjectServerCommands">
+    <commands />
+    <urls />
+  </component>
+  <component name="NextEditCompletionFeaturesState">
+    <decayedCancelled>
+      <entry key="MS100" value="1.0150927554597198" />
+      <entry key="MS500" value="1.445993787834454" />
+      <entry key="S2" value="2.5130200951905133" />
+      <entry key="S5" value="4.01974157285453" />
+      <entry key="S10" value="5.148076718935521" />
+      <entry key="S30" value="6.274357288572733" />
+      <entry key="S60" value="6.663145796204721" />
+      <entry key="M2" value="7.3080295514040206" />
+      <entry key="M5" value="9.144605238942475" />
+      <entry key="M10" value="10.612646979760106" />
+      <entry key="M15" value="11.282974288558892" />
+      <entry key="M30" value="12.071656348966926" />
+      <entry key="H1" value="12.516897635582186" />
+      <entry key="H2" value="12.758544620853861" />
+      <entry key="H4" value="13.203232026991836" />
+      <entry key="D1" value="25.690335678827182" />
+      <entry key="W1" value="38.679122618169174" />
+    </decayedCancelled>
+    <decayedSelected>
+      <entry key="MS100" value="0.0" />
+      <entry key="MS500" value="0.0" />
+      <entry key="S2" value="0.0" />
+      <entry key="S5" value="0.0" />
+      <entry key="S10" value="0.0" />
+      <entry key="S30" value="0.0" />
+      <entry key="S60" value="0.0" />
+      <entry key="M2" value="0.0" />
+      <entry key="M5" value="0.0" />
+      <entry key="M10" value="0.0" />
+      <entry key="M15" value="0.0" />
+      <entry key="M30" value="0.0" />
+      <entry key="H1" value="0.0" />
+      <entry key="H2" value="0.0" />
+      <entry key="H4" value="0.0" />
+      <entry key="D1" value="0.0" />
+      <entry key="W1" value="0.0" />
+    </decayedSelected>
+    <decayedShown>
+      <entry key="MS100" value="0.9151386298028796" />
+      <entry key="MS500" value="1.4180835721942586" />
+      <entry key="S2" value="2.5012766637144432" />
+      <entry key="S5" value="4.012002083510403" />
+      <entry key="S10" value="5.143014163047472" />
+      <entry key="S30" value="6.2722637508433365" />
+      <entry key="S60" value="6.661962809094992" />
+      <entry key="M2" value="7.307016593548075" />
+      <entry key="M5" value="9.14358881881035" />
+      <entry key="M10" value="10.61188596810577" />
+      <entry key="M15" value="11.28238947999254" />
+      <entry key="M30" value="12.071318248506374" />
+      <entry key="H1" value="12.516715664010762" />
+      <entry key="H2" value="12.758450055337674" />
+      <entry key="H4" value="13.203179195154766" />
+      <entry key="D1" value="25.690301064916763" />
+      <entry key="W1" value="38.679114491308056" />
+    </decayedShown>
+  </component>
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 5,
+  &quot;fromUser&quot;: false
+}</component>
+  <component name="ProjectId" id="3FfUcv0b7oAX5fHdCPz71a2MHSl" />
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;ASKED_SHARE_PROJECT_CONFIGURATION_FILES&quot;: &quot;true&quot;,
+    &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
+    &quot;Python.compare_blink_snr.executor&quot;: &quot;Run&quot;,
+    &quot;Python.crude_spike_finder (2).executor&quot;: &quot;Run&quot;,
+    &quot;Python.crude_spike_finder.executor&quot;: &quot;Run&quot;,
+    &quot;RunOnceActivity.MCP Project settings loaded&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.typescript.service.memoryLimit.init&quot;: &quot;true&quot;,
+    &quot;codeWithMe.voiceChat.enabledByDefault&quot;: &quot;false&quot;,
+    &quot;com.intellij.ml.llm.matterhorn.ej.ui.settings.DefaultModelSelectionForGA.v1&quot;: &quot;true&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;cursor/ganglion-eeg-studio-99bf&quot;,
+    &quot;junie.onboarding.icon.badge.shown&quot;: &quot;true&quot;,
+    &quot;last_opened_file_path&quot;: &quot;/Users/marius/Documents/coding_projects/eeg_research_app/mne_data_raw&quot;,
+    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
+    &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
+    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
+    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
+    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
+    &quot;settings.editor.selected.configurable&quot;: &quot;preferences.general&quot;,
+    &quot;to.speed.mode.migration.done&quot;: &quot;true&quot;,
+    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
+  }
+}</component>
+  <component name="RecentsManager">
+    <key name="CopyFile.RECENT_KEYS">
+      <recent name="$PROJECT_DIR$/mne_data_raw" />
+    </key>
+    <key name="MoveFile.RECENT_KEYS">
+      <recent name="$PROJECT_DIR$" />
+    </key>
+  </component>
+  <component name="RunManager" selected="Python.compare_blink_snr">
+    <configuration name="compare_blink_snr" type="PythonConfigurationType" factoryName="Python" nameIsGenerated="true">
+      <module name="ganglion-studio" />
+      <option name="ENV_FILES" value="" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <envs>
+        <env name="PYTHONUNBUFFERED" value="1" />
+      </envs>
+      <option name="SDK_HOME" value="" />
+      <option name="SDK_NAME" value="Python 3.12 (eeg_research_app)" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/tools" />
+      <option name="IS_MODULE_SDK" value="false" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <option name="DEBUG_JUST_MY_CODE" value="false" />
+      <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
+      <option name="RUN_TOOL" value="" />
+      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/tools/compare_blink_snr.py" />
+      <option name="PARAMETERS" value="" />
+      <option name="SHOW_COMMAND_LINE" value="false" />
+      <option name="EMULATE_TERMINAL" value="false" />
+      <option name="MODULE_MODE" value="false" />
+      <option name="REDIRECT_INPUT" value="false" />
+      <option name="INPUT_FILE" value="" />
+      <method v="2" />
+    </configuration>
+    <configuration name="crude_spike_finder (2)" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
+      <module name="ganglion-studio" />
+      <option name="ENV_FILES" value="" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <envs>
+        <env name="PYTHONUNBUFFERED" value="1" />
+      </envs>
+      <option name="SDK_HOME" value="" />
+      <option name="SDK_NAME" value="Python 3.12 (eeg_research_app)" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/tools" />
+      <option name="IS_MODULE_SDK" value="false" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <option name="DEBUG_JUST_MY_CODE" value="false" />
+      <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
+      <option name="RUN_TOOL" value="" />
+      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/tools/crude_spike_finder.py" />
+      <option name="PARAMETERS" value="" />
+      <option name="SHOW_COMMAND_LINE" value="false" />
+      <option name="EMULATE_TERMINAL" value="false" />
+      <option name="MODULE_MODE" value="false" />
+      <option name="REDIRECT_INPUT" value="false" />
+      <option name="INPUT_FILE" value="" />
+      <method v="2" />
+    </configuration>
+    <configuration name="crude_spike_finder" type="PythonConfigurationType" factoryName="Python" nameIsGenerated="true">
+      <module name="ganglion-studio" />
+      <option name="ENV_FILES" value="" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <envs>
+        <env name="PYTHONUNBUFFERED" value="1" />
+      </envs>
+      <option name="SDK_HOME" value="" />
+      <option name="SDK_NAME" value="Python 3.12 (eeg_research_app)" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/tools" />
+      <option name="IS_MODULE_SDK" value="false" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <option name="DEBUG_JUST_MY_CODE" value="false" />
+      <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
+      <option name="RUN_TOOL" value="" />
+      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/tools/crude_spike_finder.py" />
+      <option name="PARAMETERS" value="" />
+      <option name="SHOW_COMMAND_LINE" value="false" />
+      <option name="EMULATE_TERMINAL" value="false" />
+      <option name="MODULE_MODE" value="false" />
+      <option name="REDIRECT_INPUT" value="false" />
+      <option name="INPUT_FILE" value="" />
+      <method v="2" />
+    </configuration>
+    <recent_temporary>
+      <list>
+        <item itemvalue="Python.crude_spike_finder (2)" />
+      </list>
+    </recent_temporary>
+  </component>
+  <component name="SharedIndexes">
+    <attachedChunks>
+      <set>
+        <option value="bundled-js-predefined-d6986cc7102b-31caf2ab9e3c-JavaScript-PY-261.26222.68" />
+        <option value="bundled-python-sdk-50341a9f1f9c-c2ffad84badb-com.jetbrains.pycharm.pro.sharedIndexes.bundled-PY-261.26222.68" />
+      </set>
+    </attachedChunks>
+  </component>
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="Default task">
+      <changelist id="f507cde0-44eb-45b0-9047-1ed0278b52d3" name="Changes" comment="" />
+      <created>1782465700046</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1782465700046</updated>
+      <workItem from="1782465701244" duration="805000" />
+      <workItem from="1782466550093" duration="18038000" />
+      <workItem from="1783004762673" duration="2614000" />
+      <workItem from="1783091317744" duration="3018000" />
+    </task>
+    <servers />
+  </component>
+  <component name="TypeScriptGeneratedFilesManager">
+    <option name="version" value="3" />
+  </component>
+  <component name="com.intellij.coverage.CoverageDataManagerImpl">
+    <SUITE FILE_PATH="coverage/eeg_research_app$crude_spike_finder.coverage" NAME="crude_spike_finder Coverage Results" MODIFIED="1782764293825" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/tools" />
+    <SUITE FILE_PATH="coverage/eeg_research_app$crude_spike_finder__2_.coverage" NAME="crude_spike_finder (2) Coverage Results" MODIFIED="1782834332978" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/tools" />
+    <SUITE FILE_PATH="coverage/eeg_research_app$compare_blink_snr.coverage" NAME="compare_blink_snr Coverage Results" MODIFIED="1783004890080" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/tools" />
+  </component>
+</project>

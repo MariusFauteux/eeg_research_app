@@ -299,6 +299,10 @@ class SessionView(QWidget):
             "board_id": self._manager.board_id,
             "eeg_channels": self._manager.eeg_channels,
             "channel_names": list(self._manager.channel_names[:n_eeg]),
+            # Which channels were streaming when recorded. A False channel was
+            # switched off (board sends 0.00 -> a flat-zero column), so on reload
+            # it can be told apart from a channel that was on but died/flat-lined.
+            "channel_active": list(self._manager.channel_active[:n_eeg]),
             "channel_types": list(self._manager.channel_types[:n_eeg]),
             "electrodes": list(self._manager.electrodes[:n_eeg]),
             "placements": list(self._manager.placements[:n_eeg]),
@@ -317,7 +321,8 @@ class SessionView(QWidget):
         # Open the review window so the user can browse, edit markers and export.
         types = list(getattr(self.marker_panel, "_types", []))
         code_labels = {mt.code: mt.label for mt in types}
-        review = ReviewWindow(raw, meta, code_labels, types, title=self._config.name)
+        review = ReviewWindow(raw, meta, code_labels, types, title=self._config.name,
+                              loss_samples=loss_samples)
         review.show()
         self._reviews.append(review)
 

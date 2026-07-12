@@ -32,6 +32,11 @@ from ganglion_studio.core.dsp import FilterSettings, apply_filters
 from ganglion_studio.core.exporter import ReviewMarker
 from ganglion_studio.ui import theme
 
+# Packet-drop overlay is drawn as one curve item whose vertical ticks span this
+# fixed (huge) y-extent, so each tick covers the full plot height no matter the
+# amplitude/zoom. Added with ignoreBounds=True so it never drags auto-range.
+_OVERLAY_Y = 1e9
+
 
 class ReviewWindow(QMainWindow):
     """Browse a finished recording and curate markers before exporting."""
@@ -39,7 +44,8 @@ class ReviewWindow(QMainWindow):
     def __init__(self, raw_data: np.ndarray, meta: dict,
                  code_labels: Optional[Dict[int, str]] = None,
                  marker_types: Optional[list] = None,
-                 title: str = "Recording") -> None:
+                 title: str = "Recording",
+                 loss_samples: Optional[List[int]] = None) -> None:
         super().__init__()
         self.setWindowTitle(f"Review - {title}")
         self.resize(1200, 800)
@@ -58,6 +64,8 @@ class ReviewWindow(QMainWindow):
         self._click_time: Optional[float] = None
         self._filter = FilterSettings(notch_freq=int(meta.get("notch_freq", 50)))
         self._marker_lines: List[pg.InfiniteLine] = []
+        # Sample indices where native BLE dropped a packet (from _packet_loss.csv).
+        self._loss_samples: List[int] = list(loss_samples or [])
 
         self._markers: List[ReviewMarker] = self._extract_markers()
 
@@ -117,6 +125,23 @@ class ReviewWindow(QMainWindow):
         self.filter_chk.toggled.connect(self._redraw)
         bar.addWidget(self.filter_chk)
 
+        self.markers_chk = QCheckBox("Markers")
+        self.markers_chk.setChecked(True)
+        self.markers_chk.setToolTip("Show the manual event markers (dashed lines)")
+        self.markers_chk.toggled.connect(self._draw_marker_lines)
+        bar.addWidget(self.markers_chk)
+
+        self.drops_chk = QCheckBox("Packet drops")
+        has_loss = bool(self._loss_samples)
+        self.drops_chk.setChecked(has_loss)
+        self.drops_chk.setEnabled(has_loss)
+        self.drops_chk.setToolTip(
+            "Show where the native-Bluetooth link dropped a packet (dotted lines)"
+            if has_loss else "No packet drops were recorded"
+        )
+        self.drops_chk.toggled.connect(self._draw_loss_marks)
+        bar.addWidget(self.drops_chk)
+
         save_btn = QPushButton("Save / Export...")
         save_btn.setStyleSheet("QPushButton { background:#2f7d4f; font-weight:600; }")
         save_btn.clicked.connect(self._on_save)
@@ -141,6 +166,10 @@ class ReviewWindow(QMainWindow):
         self._cursor = pg.InfiniteLine(angle=90, movable=False,
                                        pen=pg.mkPen(palette.WHITE, width=1, style=Qt.PenStyle.DotLine))
         self._plot.addItem(self._cursor)
+        # Packet-drop overlay: a single curve drawing one vertical tick per drop.
+        self._loss_curve = pg.PlotCurveItem(
+            pen=pg.mkPen(palette.OK, width=1, style=Qt.PenStyle.DotLine))
+        self._plot.addItem(self._loss_curve, ignoreBounds=True)
         col.addWidget(self._plot_widget, 1)
 
         self.scrollbar = QScrollBar(Qt.Orientation.Horizontal)
@@ -237,12 +266,31 @@ class ReviewWindow(QMainWindow):
         self._plot.getAxis("left").setTicks([ticks])
         self._plot.setYRange(-spacing, self._n * spacing, padding=0)
         self._draw_marker_lines()
+        self._draw_loss_marks()
         self._on_view_changed()
 
-    def _draw_marker_lines(self) -> None:
+    def _draw_loss_marks(self, *_args) -> None:
+        """Dotted vertical ticks where native BLE dropped a packet."""
+        if not self._loss_samples or not self.drops_chk.isChecked():
+            self._loss_curve.clear()
+            return
+        xs = np.array([s / self._sr for s in self._loss_samples
+                       if 0 <= s < self._total], dtype=float)
+        if xs.size == 0:
+            self._loss_curve.clear()
+            return
+        # One curve, one vertical tick per drop: repeat each x and pair it with a
+        # full-height y-span; connect="pairs" joins (x,-Y)-(x,+Y) for each drop.
+        x = np.repeat(xs, 2)
+        y = np.tile([-_OVERLAY_Y, _OVERLAY_Y], xs.size)
+        self._loss_curve.setData(x, y, connect="pairs")
+
+    def _draw_marker_lines(self, *_args) -> None:
         for line in self._marker_lines:
             self._plot.removeItem(line)
         self._marker_lines.clear()
+        if not self.markers_chk.isChecked():
+            return
         for m in self._markers:
             x = m.sample / self._sr
             color = self._color_for_code(m.code)

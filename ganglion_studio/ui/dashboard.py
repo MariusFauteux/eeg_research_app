@@ -54,6 +54,7 @@ class Dashboard(QWidget):
 
     start_session = pyqtSignal(object)  # emits SessionConfig
     open_processing = pyqtSignal()  # request to open the Processing Lab
+    open_editor = pyqtSignal()  # request to open the Recording Editor
 
     def __init__(self) -> None:
         super().__init__()
@@ -80,6 +81,11 @@ class Dashboard(QWidget):
         self.processing_btn.setToolTip("Open the offline processing playground (no board needed)")
         self.processing_btn.clicked.connect(self.open_processing.emit)
         header.addWidget(self.processing_btn, alignment=Qt.AlignmentFlag.AlignTop)
+
+        self.editor_btn = QPushButton("Edit Recording…")
+        self.editor_btn.setToolTip("Open a saved .fif to crop, edit markers and channel info")
+        self.editor_btn.clicked.connect(self.open_editor.emit)
+        header.addWidget(self.editor_btn, alignment=Qt.AlignmentFlag.AlignTop)
         root.addLayout(header)
 
         body = QHBoxLayout()
