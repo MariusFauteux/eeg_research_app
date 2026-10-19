@@ -51,8 +51,8 @@ class ReviewWindow(QMainWindow):
         self.resize(1200, 800)
 
         self._raw = raw_data
-        self._meta = meta
-        self._sr = int(meta.get("sampling_rate", 200))
+        self._meta = dict(meta)
+        self._sr = float(meta.get("sampling_rate", 200))
         self._eeg_rows = list(meta.get("eeg_channels", []))
         self._names = list(meta.get("channel_names",
                                     [f"Ch{i+1}" for i in range(len(self._eeg_rows))]))
@@ -64,8 +64,11 @@ class ReviewWindow(QMainWindow):
         self._click_time: Optional[float] = None
         self._filter = FilterSettings(notch_freq=int(meta.get("notch_freq", 50)))
         self._marker_lines: List[pg.InfiniteLine] = []
+        self._impedance_windows = []
         # Sample indices where native BLE dropped a packet (from _packet_loss.csv).
-        self._loss_samples: List[int] = list(loss_samples or [])
+        self._loss_samples: List[int] = list(loss_samples if loss_samples is not None
+                                            else meta.get("loss_samples", []))
+        self._meta["loss_samples"] = self._loss_samples
 
         self._markers: List[ReviewMarker] = self._extract_markers()
 
@@ -84,6 +87,10 @@ class ReviewWindow(QMainWindow):
 
     # ------------------------------------------------------------- markers
     def _extract_markers(self) -> List[ReviewMarker]:
+        if "marker_events" in self._meta:
+            return [ReviewMarker(m["sample"], m["code"], m["label"])
+                    for m in self._meta["marker_events"]
+                    if 0 <= m["sample"] < self._total]
         mch = int(self._meta.get("marker_channel", 0))
         markers: List[ReviewMarker] = []
         if self._total and 0 <= mch < self._raw.shape[0]:
@@ -103,6 +110,11 @@ class ReviewWindow(QMainWindow):
         self._info_label = info
         bar.addWidget(info)
         bar.addStretch(1)
+
+        if self._meta.get("impedance_file"):
+            impedance_btn = QPushButton("View impedance")
+            impedance_btn.clicked.connect(self._open_impedance)
+            bar.addWidget(impedance_btn)
 
         bar.addWidget(QLabel("Window"))
         self.window_spin = QDoubleSpinBox()
@@ -147,6 +159,17 @@ class ReviewWindow(QMainWindow):
         save_btn.clicked.connect(self._on_save)
         bar.addWidget(save_btn)
         return bar
+
+    def _open_impedance(self) -> None:
+        from ganglion_studio.ui.impedance_session_view import ImpedanceRecordingWindow
+
+        try:
+            window = ImpedanceRecordingWindow(self._meta["impedance_file"])
+        except Exception as exc:
+            QMessageBox.warning(self, "Could not open impedance recording", str(exc))
+            return
+        self._impedance_windows.append(window)
+        window.show()
 
     def _build_plot(self) -> QVBoxLayout:
         col = QVBoxLayout()

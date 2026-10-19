@@ -53,8 +53,12 @@ def _layout(csv_path: str):
     board_id = BoardIds.GANGLION_NATIVE_BOARD.value
     sr, eeg_rows = None, None
     if meta_path and os.path.exists(meta_path):
-        meta = json.load(open(meta_path, encoding="utf-8"))
-        sr = int(meta.get("sampling_rate", 0)) or None
+        with open(meta_path, encoding="utf-8") as fh:
+            meta = json.load(fh)
+        if "sampling_rate" in meta:
+            sr = float(meta["sampling_rate"])
+            if not np.isfinite(sr) or sr <= 0:
+                raise ValueError("Sampling rate must be a positive finite number.")
         eeg_rows = list(meta.get("eeg_channels", [])) or None
         board_id = int(meta.get("board_id", board_id))
     descr = BoardShim.get_board_descr(board_id)

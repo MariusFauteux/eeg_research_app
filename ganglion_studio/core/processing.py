@@ -12,7 +12,7 @@ failure degrades gracefully and reports a message instead of raising.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import List, Optional, Tuple
 
 import numpy as np
@@ -25,7 +25,8 @@ from brainflow.data_filter import (
     WaveletTypes,
 )
 
-from .dsp import FilterSettings, apply_filters, interpolate_gaps
+from .dsp import FilterSettings, apply_filters, finite_segments, interpolate_gaps
+from .packet_loss import crop_loss_spans, loss_spans
 
 WAVELETS = ["DB4", "DB6", "DB8", "SYM4", "SYM5", "COIF3", "BIOR3_9", "HAAR"]
 
@@ -89,13 +90,16 @@ class ProcessingConfig:
     # are the drop sample-indices saved with the recording (_packet_loss.csv).
     repair_gaps: bool = False
     loss_samples: List[int] = field(default_factory=list)
+    # Parallel span lengths, when known (e.g. a crop retaining half a packet).
+    # Missing entries use the legacy two-sample packet length.
+    loss_lengths: Optional[List[int]] = None
     reref_car: bool = False
     detrend: str = "none"  # none / constant / linear
     filters: FilterStepConfig = field(default_factory=FilterStepConfig)
     wavelet: WaveletStepConfig = field(default_factory=WaveletStepConfig)
     asr: AsrStepConfig = field(default_factory=AsrStepConfig)
     aas: AasStepConfig = field(default_factory=AasStepConfig)
-    # Indices of active channels; CAR is computed over these only. Empty -> all.
+    # Indices of active channels; CAR uses these only. None -> all, [] -> none.
     active_channels: Optional[List[int]] = None
 
 
@@ -151,11 +155,13 @@ def _ensure_asr_compat() -> None:
 # --------------------------------------------------------------------------- #
 # R-peak detection (NeuroKit2)
 # --------------------------------------------------------------------------- #
-def detect_rpeaks(ref_channel: np.ndarray, sampling_rate: int) -> np.ndarray:
-    """Return R-peak sample indices using NeuroKit2."""
+def detect_rpeaks(ref_channel: np.ndarray, sampling_rate: float) -> np.ndarray:
+    """Return R-peak sample indices using NeuroKit2 at the exact input rate."""
     import neurokit2 as nk
 
     sig = np.ascontiguousarray(ref_channel, dtype=np.float64)
+    if not np.isfinite(sig).all():
+        raise ValueError("R-peak detection requires a continuous measured section")
     if sig.size < sampling_rate:
         return np.array([], dtype=int)
     cleaned = nk.ecg_clean(sig, sampling_rate=sampling_rate)
@@ -167,7 +173,7 @@ def detect_rpeaks(ref_channel: np.ndarray, sampling_rate: int) -> np.ndarray:
 # --------------------------------------------------------------------------- #
 # AAS - R-peak-locked median template subtraction
 # --------------------------------------------------------------------------- #
-def apply_aas(eeg: np.ndarray, sampling_rate: int, cfg: AasStepConfig,
+def apply_aas(eeg: np.ndarray, sampling_rate: float, cfg: AasStepConfig,
               ) -> Tuple[np.ndarray, str]:
     """Remove the heart-beat (ECG) artifact that leaks into EEG.
 
@@ -176,6 +182,8 @@ def apply_aas(eeg: np.ndarray, sampling_rate: int, cfg: AasStepConfig,
     is robust to the occasional odd beat). Returns (cleaned_eeg, message).
     """
     out = eeg.copy()
+    if not np.isfinite(eeg).all():
+        return out, "AAS skipped: select a continuous measured section"
     ref_idx = cfg.ref_channel
     if ref_idx < 0 or ref_idx >= eeg.shape[0]:
         return out, "AAS skipped: invalid reference channel"
@@ -209,7 +217,7 @@ def apply_aas(eeg: np.ndarray, sampling_rate: int, cfg: AasStepConfig,
 # --------------------------------------------------------------------------- #
 # ASR (asrpy + MNE)
 # --------------------------------------------------------------------------- #
-def apply_asr(eeg: np.ndarray, sampling_rate: int, ch_names: List[str],
+def apply_asr(eeg: np.ndarray, sampling_rate: float, ch_names: List[str],
               cfg: AsrStepConfig) -> Tuple[np.ndarray, str]:
     """Artifact Subspace Reconstruction (meegkit).
 
@@ -217,6 +225,8 @@ def apply_asr(eeg: np.ndarray, sampling_rate: int, ch_names: List[str],
     too far from it (eye blinks, jaw clench, motion). ``cutoff`` is in standard
     deviations -- lower removes more. Returns (cleaned_eeg, message).
     """
+    if not np.isfinite(eeg).all():
+        return eeg, "ASR skipped: select a continuous measured section"
     try:
         _ensure_asr_compat()
         from meegkit.asr import ASR
@@ -244,6 +254,8 @@ def apply_wavelet(eeg: np.ndarray, cfg: WaveletStepConfig) -> Tuple[np.ndarray, 
     (assumed to be noise), smoothing the trace while keeping sharp transients.
     Returns (cleaned_eeg, message).
     """
+    if not np.isfinite(eeg).all():
+        return eeg, "Wavelet skipped: select a continuous measured section"
     wt = getattr(WaveletTypes, cfg.wavelet, WaveletTypes.DB4)
     den = getattr(WaveletDenoisingTypes, cfg.denoising, WaveletDenoisingTypes.SURESHRINK)
     thr = getattr(ThresholdTypes, cfg.threshold, ThresholdTypes.SOFT)
@@ -261,29 +273,42 @@ def apply_wavelet(eeg: np.ndarray, cfg: WaveletStepConfig) -> Tuple[np.ndarray, 
 # --------------------------------------------------------------------------- #
 # Pipeline
 # --------------------------------------------------------------------------- #
-def apply_pipeline(eeg: np.ndarray, sampling_rate: int, ch_names: List[str],
+def apply_pipeline(eeg: np.ndarray, sampling_rate: float, ch_names: List[str],
                    config: ProcessingConfig) -> Tuple[np.ndarray, List[str]]:
     """Apply the enabled steps in order. Returns (processed_eeg, messages)."""
     messages: List[str] = []
     if eeg is None or eeg.ndim != 2 or eeg.shape[1] == 0:
         return eeg, ["No data to process."]
     data = np.ascontiguousarray(eeg, dtype=np.float64).copy()
+    if not np.isfinite(data).all():
+        runs = finite_segments(data)
+        for run in runs:
+            gaps = crop_loss_spans(config.loss_samples, config.loss_lengths, run.start, run.stop)
+            section_config = replace(config, loss_samples=[start for start, length in gaps],
+                                     loss_lengths=[length for start, length in gaps])
+            data[:, run], section_messages = apply_pipeline(data[:, run], sampling_rate,
+                                                             ch_names, section_config)
+            messages.extend(message for message in section_messages if message not in messages)
+        messages.insert(0, f"Processed {len(runs)} measured sections independently; "
+                           "unmeasured samples remain missing.")
+        return data, messages
 
     # Packet-loss repair FIRST: interpolate the held-flat samples at each saved
     # drop index so the steps never reach the filter (and never get spread by CAR).
     if config.repair_gaps and config.loss_samples:
         bad = np.zeros(data.shape[1], dtype=bool)
-        for idx in config.loss_samples:
-            bad[idx:idx + 2] = True   # the 2 held-flat samples of a dropped packet
+        spans = loss_spans(config.loss_samples, config.loss_lengths, data.shape[1])
+        for start, length in spans:
+            bad[start:start + length] = True
         for ch in range(data.shape[0]):
             data[ch] = interpolate_gaps(data[ch], bad)
-        messages.append(f"Repaired {len(config.loss_samples)} packet-loss gaps (interpolated)")
+        messages.append(f"Repaired {len(spans)} packet-loss gaps (interpolated)")
 
     # Common Average Reference (CAR): subtract the across-channel mean so noise
     # shared by all electrodes (e.g. reference drift) cancels out.
     if config.reref_car and data.shape[0] > 1:
         active = config.active_channels
-        if active:
+        if active is not None:
             rows = [r for r in active if 0 <= r < data.shape[0]]
         else:
             rows = list(range(data.shape[0]))
@@ -295,7 +320,10 @@ def apply_pipeline(eeg: np.ndarray, sampling_rate: int, ch_names: List[str],
     if config.detrend in ("constant", "linear"):
         op = DetrendOperations.CONSTANT.value if config.detrend == "constant" else DetrendOperations.LINEAR.value
         for ch in range(data.shape[0]):
-            DataFilter.detrend(data[ch], op)
+            if data.shape[1] < 2:
+                data[ch] -= np.mean(data[ch])
+            else:
+                DataFilter.detrend(data[ch], op)
         messages.append(f"Detrend: {config.detrend}")
 
     if config.filters.enabled:

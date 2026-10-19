@@ -7,11 +7,13 @@ from typing import List
 
 import numpy as np
 import pyqtgraph as pg
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QCheckBox,
     QDoubleSpinBox,
     QHBoxLayout,
     QLabel,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -113,16 +115,21 @@ class TimeSeriesWidget(QWidget):
         self.scroll_hint = QLabel("Pause the stream to scroll/zoom")
         self.scroll_hint.setStyleSheet(theme.HINT_QSS)
         bar.addWidget(self.scroll_hint)
-        bar.addStretch(1)
 
-        # Right-aligned live signal quality / BLE packet-loss readout.
+        # Live signal-quality / BLE packet-loss readout, right-aligned. It fills the
+        # remaining space itself (Ignored width policy + stretch) instead of using a
+        # trailing stretch, so its text growing as drops accumulate
+        # ("... (N dropped)") can never widen the control bar -- and with it the
+        # whole window. When space is tight the text clips instead of forcing growth.
         self.quality_label = QLabel("Signal: good")
         self.quality_label.setStyleSheet(f"color: {palette.GOOD};")
+        self.quality_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.quality_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.quality_label.setToolTip(
             "Native-Bluetooth packet loss. Each drop is marked on the trace and "
             "saved with recordings. High loss → move closer or use the dongle."
         )
-        bar.addWidget(self.quality_label)
+        bar.addWidget(self.quality_label, 1)
         return bar
 
     def update_plot(self, settings: FilterSettings, active: List[bool]) -> None:

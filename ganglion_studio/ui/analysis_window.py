@@ -68,7 +68,7 @@ class FigurePanel(QWidget):
 
 class AnalysisWindow(QMainWindow):
     def __init__(self, processed: np.ndarray, original: np.ndarray,
-                 sampling_rate: int, metas: List[ChannelMeta],
+                 sampling_rate: float, metas: List[ChannelMeta],
                  title: str = "Recording") -> None:
         super().__init__()
         self.setWindowTitle(f"Analysis - {title}")

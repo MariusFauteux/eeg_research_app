@@ -26,7 +26,7 @@ from ganglion_studio import palette
 # re-exported here so the live Channel Setup dialog and the Processing Lab (which
 # imports them from this module) always offer identical lists.
 from .board_config import CHANNEL_TYPES, ELECTRODES  # noqa: F401  (re-exported)
-from .dsp import EEG_BANDS, compute_psd, dominant_frequency, signal_quality
+from .dsp import EEG_BANDS, compute_psd, dominant_frequency, integrate_band_power, signal_quality
 
 # Electrode-material colours come from the central palette.
 _ELECTRODE_COLORS = palette.ELECTRODE_COLORS
@@ -65,19 +65,12 @@ class ChannelMeta:
 # --------------------------------------------------------------------------- #
 # Metrics
 # --------------------------------------------------------------------------- #
-# numpy 2.x renamed trapz -> trapezoid; support both.
-_trapz = getattr(np, "trapezoid", None) or np.trapz
-
-
 def _band_powers(freqs: np.ndarray, psd: np.ndarray) -> Dict[str, float]:
-    out: Dict[str, float] = {}
-    for name, lo, hi in EEG_BANDS:
-        mask = (freqs >= lo) & (freqs < hi)
-        out[name] = float(_trapz(psd[mask], freqs[mask])) if np.any(mask) else 0.0
-    return out
+    return {name: integrate_band_power(freqs, psd, lo, hi)
+            for name, lo, hi in EEG_BANDS}
 
 
-def channel_metrics(channel: np.ndarray, sampling_rate: int) -> dict:
+def channel_metrics(channel: np.ndarray, sampling_rate: float) -> dict:
     """Per-channel signal/noise metrics for characterization."""
     sq = signal_quality(channel, sampling_rate)
     freqs, psd = compute_psd(np.ascontiguousarray(channel), sampling_rate)
@@ -98,7 +91,7 @@ def channel_metrics(channel: np.ndarray, sampling_rate: int) -> dict:
     }
 
 
-def pair_agreement(x: np.ndarray, y: np.ndarray, sampling_rate: int) -> dict:
+def pair_agreement(x: np.ndarray, y: np.ndarray, sampling_rate: float) -> dict:
     """Agreement metrics between two simultaneously-recorded channels."""
     x = np.asarray(x, dtype=np.float64)
     y = np.asarray(y, dtype=np.float64)
@@ -158,7 +151,7 @@ def comparison_available(metas: List[ChannelMeta]) -> bool:
     return any(m.is_pedot for m in eeg) and any(m.is_agagcl for m in eeg)
 
 
-def group_band_stats(eeg: np.ndarray, sampling_rate: int,
+def group_band_stats(eeg: np.ndarray, sampling_rate: float,
                      metas: List[ChannelMeta]) -> dict:
     """Per-material mean/std relative band power + t-test p-values (PEDOT vs Ag/AgCl)."""
     groups: Dict[str, List[np.ndarray]] = {"PEDOT": [], "Ag/AgCl": []}
@@ -200,7 +193,7 @@ def _ch_color(meta: ChannelMeta) -> str:
     return _ELECTRODE_COLORS.get(meta.electrode, "#cccccc")
 
 
-def fig_psd(eeg: np.ndarray, sr: int, metas: List[ChannelMeta]) -> Figure:
+def fig_psd(eeg: np.ndarray, sr: float, metas: List[ChannelMeta]) -> Figure:
     fig = _new_fig()
     ax = fig.add_subplot(111)
     for m in eeg_metas(metas):
@@ -220,7 +213,7 @@ def fig_psd(eeg: np.ndarray, sr: int, metas: List[ChannelMeta]) -> Figure:
     return fig
 
 
-def fig_band_powers(eeg: np.ndarray, sr: int, metas: List[ChannelMeta]) -> Figure:
+def fig_band_powers(eeg: np.ndarray, sr: float, metas: List[ChannelMeta]) -> Figure:
     fig = _new_fig()
     ax = fig.add_subplot(111)
     eegm = eeg_metas(metas)
@@ -239,7 +232,7 @@ def fig_band_powers(eeg: np.ndarray, sr: int, metas: List[ChannelMeta]) -> Figur
     return fig
 
 
-def fig_quality_table(eeg: np.ndarray, sr: int, metas: List[ChannelMeta]) -> Figure:
+def fig_quality_table(eeg: np.ndarray, sr: float, metas: List[ChannelMeta]) -> Figure:
     fig = _new_fig(8.0, 0.5 + 0.4 * (len(metas) + 1))
     ax = fig.add_subplot(111)
     ax.axis("off")
@@ -260,7 +253,7 @@ def fig_quality_table(eeg: np.ndarray, sr: int, metas: List[ChannelMeta]) -> Fig
     return fig
 
 
-def fig_char_noise(eeg: np.ndarray, sr: int, metas: List[ChannelMeta]) -> Figure:
+def fig_char_noise(eeg: np.ndarray, sr: float, metas: List[ChannelMeta]) -> Figure:
     fig = _new_fig(8.0, 6.0)
     eegm = eeg_metas(metas)
     x = np.arange(len(eegm))
@@ -285,7 +278,7 @@ def fig_char_noise(eeg: np.ndarray, sr: int, metas: List[ChannelMeta]) -> Figure
     return fig
 
 
-def fig_char_psd_by_material(eeg: np.ndarray, sr: int, metas: List[ChannelMeta]) -> Figure:
+def fig_char_psd_by_material(eeg: np.ndarray, sr: float, metas: List[ChannelMeta]) -> Figure:
     fig = _new_fig()
     ax = fig.add_subplot(111)
     seen = set()
@@ -322,7 +315,7 @@ def _group_psd(eeg, sr, metas, material) -> Tuple[np.ndarray, np.ndarray, np.nda
     return freqs, arr.mean(0), arr.std(0)
 
 
-def fig_cmp_psd(eeg: np.ndarray, sr: int, metas: List[ChannelMeta]) -> Figure:
+def fig_cmp_psd(eeg: np.ndarray, sr: float, metas: List[ChannelMeta]) -> Figure:
     fig = _new_fig()
     ax = fig.add_subplot(111)
     for material, color in (("PEDOT", palette.MATERIAL_PEDOT), ("Ag/AgCl", palette.MATERIAL_AGAGCL)):
@@ -339,7 +332,7 @@ def fig_cmp_psd(eeg: np.ndarray, sr: int, metas: List[ChannelMeta]) -> Figure:
     return fig
 
 
-def fig_cmp_coherence(x: np.ndarray, y: np.ndarray, sr: int, ag: dict,
+def fig_cmp_coherence(x: np.ndarray, y: np.ndarray, sr: float, ag: dict,
                       label_x: str, label_y: str) -> Figure:
     fig = _new_fig()
     ax = fig.add_subplot(111)
@@ -394,7 +387,7 @@ def fig_cmp_bland_altman(x: np.ndarray, y: np.ndarray, ag: dict,
     return fig
 
 
-def fig_pair_timeseries(x: np.ndarray, y: np.ndarray, sr: int,
+def fig_pair_timeseries(x: np.ndarray, y: np.ndarray, sr: float,
                         label_x: str, label_y: str, window_s: float = 5.0) -> Figure:
     fig = _new_fig(8.0, 4.0)
     ax = fig.add_subplot(111)
@@ -410,7 +403,7 @@ def fig_pair_timeseries(x: np.ndarray, y: np.ndarray, sr: int,
     return fig
 
 
-def fig_pair_psd(x: np.ndarray, y: np.ndarray, sr: int,
+def fig_pair_psd(x: np.ndarray, y: np.ndarray, sr: float,
                  label_x: str, label_y: str) -> Figure:
     fig = _new_fig()
     ax = fig.add_subplot(111)
@@ -445,7 +438,7 @@ def fig_pair_histogram(x: np.ndarray, y: np.ndarray,
     return fig
 
 
-def fig_pair_cross_correlation(x: np.ndarray, y: np.ndarray, sr: int,
+def fig_pair_cross_correlation(x: np.ndarray, y: np.ndarray, sr: float,
                                label_x: str, label_y: str,
                                max_lag_s: float = 0.5) -> Figure:
     fig = _new_fig(7.0, 4.0)
@@ -467,7 +460,7 @@ def fig_pair_cross_correlation(x: np.ndarray, y: np.ndarray, sr: int,
     return fig
 
 
-def fig_pair_bandpower_ratio(x: np.ndarray, y: np.ndarray, sr: int,
+def fig_pair_bandpower_ratio(x: np.ndarray, y: np.ndarray, sr: float,
                              label_x: str, label_y: str) -> Figure:
     fig = _new_fig(7.0, 4.0)
     ax = fig.add_subplot(111)
@@ -489,7 +482,7 @@ def fig_pair_bandpower_ratio(x: np.ndarray, y: np.ndarray, sr: int,
     return fig
 
 
-def fig_pair_stats_table(x: np.ndarray, y: np.ndarray, sr: int, ag: dict,
+def fig_pair_stats_table(x: np.ndarray, y: np.ndarray, sr: float, ag: dict,
                          label_x: str, label_y: str) -> Figure:
     mx = channel_metrics(x, sr)
     my = channel_metrics(y, sr)
@@ -522,7 +515,7 @@ def fig_pair_stats_table(x: np.ndarray, y: np.ndarray, sr: int, ag: dict,
     return fig
 
 
-def fig_cmp_bandpower(eeg: np.ndarray, sr: int, metas: List[ChannelMeta]) -> Figure:
+def fig_cmp_bandpower(eeg: np.ndarray, sr: float, metas: List[ChannelMeta]) -> Figure:
     fig = _new_fig()
     ax = fig.add_subplot(111)
     stats = group_band_stats(eeg, sr, metas)

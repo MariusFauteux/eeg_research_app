@@ -16,6 +16,7 @@ from __future__ import annotations
 import queue
 
 import numpy as np
+import pytest
 
 from ganglion_studio.core.native_ganglion import (
     NUM_EEG,
@@ -106,6 +107,24 @@ def test_counter_wrap_is_not_a_gap():
     out = dec.decode(make_delta(100, [-5] * (2 * NUM_EEG)))
     counts = [out[0][0] / SCALE_UV_PER_COUNT, out[1][0] / SCALE_UV_PER_COUNT]
     assert np.allclose(counts, [15, 20])  # applied, not held flat
+
+
+def test_alternate_counter_wrap_is_not_a_gap():
+    dec = GanglionDecoder()
+    dec._last_id = 200
+    out = dec.decode(make_delta(101, [-5] * (2 * NUM_EEG)))
+    assert np.allclose([s[0] / SCALE_UV_PER_COUNT for s in out], [5, 10])
+    assert dec.dropped == 0
+
+
+@pytest.mark.parametrize("previous,current", [(198, 100), (198, 101), (199, 101)])
+def test_missing_packet_near_counter_wrap_is_a_gap(previous, current):
+    dec = GanglionDecoder()
+    dec._last_id = previous
+    dec._running = [10] * NUM_EEG
+    out = dec.decode(make_delta(current, [-100000] * (2 * NUM_EEG)))
+    assert np.allclose([s[0] / SCALE_UV_PER_COUNT for s in out], [10, 10])
+    assert dec.dropped == 1
 
 
 def test_dropped_packet_holds_flat_no_spike():
@@ -213,12 +232,42 @@ def test_to_matrix_layout():
 
 def test_to_matrix_marker_stamped_once():
     client = _client()
-    client.insert_marker(5.0)
-    out = client._to_matrix(np.zeros((NUM_EEG + 1, 3)))
+    client.insert_marker(5.0, timestamp=100.015)
+    block = np.zeros((NUM_EEG + 1, 3))
+    block[NUM_EEG] = [100.005, 100.010, 100.015]
+    out = client._to_matrix(block)
     assert out[7, -1] == 5.0
     assert out[7, 0] == 0.0 and out[7, 1] == 0.0
     out2 = client._to_matrix(np.zeros((NUM_EEG + 1, 2)))
     assert np.allclose(out2[7], [0.0, 0.0])
+
+
+def test_native_rapid_markers_keep_collisions_at_their_actual_sample():
+    client = _client()
+    client.insert_marker(1, timestamp=100.011)
+    client.insert_marker(2, timestamp=100.012)
+    client.insert_marker(3, timestamp=100.019)
+    block = np.zeros((NUM_EEG + 1, 4))
+    block[NUM_EEG] = [100.005, 100.010, 100.015, 100.020]
+
+    out = client._to_matrix(block)
+
+    assert client.last_markers == [(2, 1.0, 100.011), (2, 2.0, 100.012), (3, 3.0, 100.019)]
+    assert np.array_equal(out[7], [0, 0, 1, 3])
+
+
+def test_native_marker_waits_for_data_after_its_insertion_time():
+    client = _client()
+    client.insert_marker(5, timestamp=100.020)
+    block = np.zeros((NUM_EEG + 1, 2))
+    block[NUM_EEG] = [100.005, 100.010]
+    assert not client._to_matrix(block)[7].any()
+    assert client.last_markers == []
+
+    block[NUM_EEG] = [100.015, 100.025]
+    out = client._to_matrix(block)
+    assert np.array_equal(out[7], [0, 5])
+    assert client.last_markers == [(1, 5.0, 100.020)]
 
 
 def test_get_board_data_peels_loss_row():

@@ -83,10 +83,18 @@ class StatsPanel(QGroupBox):
             return
 
         rms_values = []
+        missing_rows = 0
         for i in range(self._n):
             is_active = active[i] if i < len(active) else True
             if not is_active:
                 self._set_row(i, None)
+                continue
+            if not np.isfinite(data[i]).all():
+                missing_rows += 1
+                for column in range(1, len(_COLUMNS)):
+                    item = self.table.item(i, column)
+                    item.setText("EEG gap" if column == len(_COLUMNS) - 1 else "—")
+                    item.setForeground(QColor(palette.NEUTRAL))
                 continue
             filtered = apply_filters(data[i], sr, settings)
             stats = channel_stats(filtered, sr)
@@ -99,12 +107,13 @@ class StatsPanel(QGroupBox):
             self._set_row(i, stats)
             rms_values.append(stats["rms"])
 
-        mean_rms = float(np.mean(rms_values)) if rms_values else 0.0
+        mean_rms = f"{np.mean(rms_values):0.1f}" if rms_values else "—"
         rec = "recording" if self._manager.recording else "idle"
         secs = n / sr if sr else 0.0
         self.general.setText(
             f"Fs {sr} Hz | window {secs:0.1f}s ({n} samp) | "
-            f"buffer {self._manager._filled} samp | mean RMS {mean_rms:0.1f} uV | {rec}"
+            f"buffer {self._manager._filled} samp | mean RMS {mean_rms} uV | {rec}"
+            + (" | EEG gap" if missing_rows else "")
         )
 
     def _set_row(self, row: int, stats) -> None:

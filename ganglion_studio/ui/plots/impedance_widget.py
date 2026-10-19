@@ -1,124 +1,103 @@
-"""Live electrode impedance bars + history (electrode characterization)."""
+"""Actual impedance measurements from a timed check within an EEG session."""
 
 from __future__ import annotations
 
 import time
-from typing import List
+from typing import List, Optional
 
-import numpy as np
-import pyqtgraph as pg
+from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
-    QHBoxLayout,
+    QAbstractItemView,
+    QHeaderView,
     QLabel,
-    QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
 from ganglion_studio import palette
-from ganglion_studio.core import board_config as cfg
 from ganglion_studio.core.board_manager import BoardManager
 from ganglion_studio.core.dsp import FilterSettings
 from ganglion_studio.ui import theme
+from ganglion_studio.ui.impedance_session_view import ImpedanceTimeSeries, STALE_AFTER_SECONDS
 
 
 class ImpedanceWidget(QWidget):
-    # Impedance changes slowly; refreshing a few times per second is plenty.
-    refresh_hz = 8.0
+    """Read-only view; the session controls own timed hardware mode changes."""
+
+    refresh_hz = 4.0
 
     def __init__(self, manager: BoardManager) -> None:
         super().__init__()
         self._manager = manager
-        self._n = len(manager.eeg_channels)
-        self._t0 = time.time()
-        self._hist_t: List[float] = []
-        self._hist_vals: List[List[float]] = [[] for _ in range(self._n)]
-
-        root = QVBoxLayout(self)
-        bar = QHBoxLayout()
-        self.toggle_btn = QPushButton("Start impedance test")
-        self.toggle_btn.setCheckable(True)
-        self.toggle_btn.toggled.connect(self._on_toggle)
-        bar.addWidget(self.toggle_btn)
-        self.status = QLabel("Impedance test off. EEG streaming continues.")
+        self._channel_names = list(manager.impedance_channel_names)
+        self._origin: Optional[float] = None
+        layout = QVBoxLayout(self)
+        self.status = QLabel()
+        self.status.setWordWrap(True)
         self.status.setStyleSheet(theme.MUTED_QSS)
-        bar.addWidget(self.status)
-        bar.addStretch(1)
-        root.addLayout(bar)
-
-        legend = QLabel(
-            f"Good < {cfg.IMPEDANCE_GOOD_KOHM:.0f} k\u03A9   "
-            f"OK < {cfg.IMPEDANCE_OK_KOHM:.0f} k\u03A9   Bad above"
-        )
-        legend.setStyleSheet(theme.MUTED_QSS)
-        root.addWidget(legend)
-
-        glw = pg.GraphicsLayoutWidget()
-        root.addWidget(glw, 1)
-
-        self._bar_plot = glw.addPlot(row=0, col=0)
-        self._bar_plot.setLabel("left", "Impedance", units="k\u03A9")
-        self._bar_plot.setLabel("bottom", "Channel")
-        self._bar_plot.getAxis("bottom").setTicks(
-            [list(enumerate(self._manager.channel_names[: self._n]))]
-        )
-        self._bar_item = pg.BarGraphItem(
-            x=list(range(self._n)), height=[0] * self._n, width=0.6, brush=palette.GOOD
-        )
-        self._bar_plot.addItem(self._bar_item)
-        self._value_labels: List[pg.TextItem] = []
-        for i in range(self._n):
-            txt = pg.TextItem("", anchor=(0.5, 1.0))
-            self._bar_plot.addItem(txt)
-            self._value_labels.append(txt)
-
-        self._hist_plot = glw.addPlot(row=1, col=0)
-        self._hist_plot.setLabel("left", "Impedance", units="k\u03A9")
-        self._hist_plot.setLabel("bottom", "Time", units="s")
-        self._hist_plot.showGrid(x=True, y=True, alpha=0.2)
-        self._hist_legend = self._hist_plot.addLegend()
-        self._hist_curves: List[pg.PlotDataItem] = []
-        for i in range(self._n):
-            color = cfg.CHANNEL_COLORS[i % len(cfg.CHANNEL_COLORS)]
-            self._hist_curves.append(
-                self._hist_plot.plot(pen=pg.mkPen(color, width=1.5), name=self._manager.channel_names[i])
-            )
+        layout.addWidget(self.status)
+        hint = QLabel("Each point is one received measurement, including REF. "
+                      "Channels update at different times; results remain visible after the check.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet(theme.HINT_QSS)
+        layout.addWidget(hint)
+        self.current_table = QTableWidget(len(self._channel_names), 4)
+        self.current_table.setHorizontalHeaderLabels(["Channel", "Latest (kΩ)", "Last update", "State"])
+        self.current_table.verticalHeader().hide()
+        self.current_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.current_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.current_table.setMaximumHeight(205)
+        layout.addWidget(self.current_table)
+        self.time_series = ImpedanceTimeSeries(self._channel_names)
+        layout.addWidget(self.time_series, 1)
+        self.update_plot(FilterSettings(), [])
 
     def set_channel_names(self, names: List[str]) -> None:
-        self._bar_plot.getAxis("bottom").setTicks([list(enumerate(names[: self._n]))])
-        for i, curve in enumerate(self._hist_curves):
-            if i < len(names):
-                self._hist_legend.removeItem(curve)
-                self._hist_legend.addItem(curve, names[i])
-
-    def _on_toggle(self, checked: bool) -> None:
-        if checked:
-            self._manager.start_impedance()
-            self.toggle_btn.setText("Stop impedance test")
-            self.status.setText("Impedance test running (data stream active)...")
-        else:
-            self._manager.stop_impedance()
-            self.toggle_btn.setText("Start impedance test")
-            self.status.setText("Impedance test off. EEG streaming continues.")
+        self._channel_names = [(names[i] if i < len(names) else f"Ch{i + 1}")
+                               for i in range(4)] + ["REF"]
+        self.time_series.set_channel_names(self._channel_names)
+        self.update_plot(FilterSettings(), [])
 
     def update_plot(self, settings: FilterSettings, active: List[bool]) -> None:
-        vals = self._manager.latest_impedance_kohm()
-        heights = [max(0.0, v) if v >= 0 else 0.0 for v in vals]
-        colors = [cfg.impedance_color(v) for v in vals]
-        self._bar_item.setOpts(height=heights, brushes=colors)
-
-        ymax = max(heights + [cfg.IMPEDANCE_OK_KOHM]) * 1.2
-        for i in range(self._n):
-            label = f"{vals[i]:.1f}" if vals[i] >= 0 else "n/a"
-            self._value_labels[i].setText(label)
-            self._value_labels[i].setPos(i, heights[i] + ymax * 0.02)
-
-        now = time.time() - self._t0
-        self._hist_t.append(now)
-        for i in range(self._n):
-            self._hist_vals[i].append(heights[i])
-        if len(self._hist_t) > 600:
-            self._hist_t = self._hist_t[-600:]
-            self._hist_vals = [v[-600:] for v in self._hist_vals]
-        for i in range(self._n):
-            self._hist_curves[i].setData(self._hist_t, self._hist_vals[i])
+        now = time.time()
+        readings = self._manager.impedance_history()
+        latest = {reading.channel: reading for reading in self._manager.latest_impedance_readings()}
+        if readings and self._origin is None:
+            self._origin = min(reading.timestamp for reading in readings)
+        self.time_series.set_readings(readings, origin=self._origin if self._origin is not None else now)
+        state = getattr(self._manager, "impedance_check_status", "idle")
+        measuring = state == "measuring" or self._manager.impedance_mode
+        started = getattr(self._manager, "impedance_check_started_at", None)
+        for channel, name in enumerate(self._channel_names):
+            reading = latest.get(channel)
+            if reading is None:
+                cells, color = [name, "—", "—", "Waiting"], palette.MUTED
+            else:
+                age = max(0.0, now - reading.timestamp)
+                if started is not None and reading.timestamp < started:
+                    freshness = "Previous check"
+                elif measuring:
+                    freshness = "Stale" if age >= STALE_AFTER_SECONDS else "Current"
+                else:
+                    freshness = "Last check"
+                cells = [name, f"{reading.ohms / 1000.0:.2f}", f"{age:.1f} s ago", freshness]
+                color = palette.OK if freshness == "Stale" else palette.FG
+            for column, text in enumerate(cells):
+                item = QTableWidgetItem(text)
+                item.setForeground(QColor(color))
+                self.current_table.setItem(channel, column, item)
+        if state == "starting":
+            text = "Starting impedance check… EEG is temporarily paused."
+        elif state == "restoring":
+            text = "Restoring EEG… Impedance measurements remain visible below."
+        elif state == "restore_failed":
+            text = "EEG has not resumed. Follow the message in the session controls."
+        elif measuring:
+            text = "Impedance check running. EEG resumes when the timed check ends."
+        elif readings:
+            text = "Last impedance measurements shown below. Use Get impedance while recording for another check."
+        else:
+            text = "Use Get impedance while recording to run a timed check. Results will appear here."
+        self.status.setText(text)

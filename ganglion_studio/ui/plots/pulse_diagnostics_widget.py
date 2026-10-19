@@ -76,6 +76,9 @@ class PulseDiagnosticsWidget(QWidget):
         root.addWidget(self.detail)
 
         self.metrics = QLabel("")
+        # Wrap: the metrics line grows as the drop count climbs; without wrapping its
+        # width would inflate the tab's (and window's) minimum width over time.
+        self.metrics.setWordWrap(True)
         self.metrics.setStyleSheet(f"color:{palette.FG}; font-family:monospace;")
         root.addWidget(self.metrics)
 
@@ -178,6 +181,24 @@ class PulseDiagnosticsWidget(QWidget):
                 full, loss, n = full[:, -m:], loss[-m:], m
 
         eeg_rows = self._manager.eeg_channels
+        if not np.isfinite(full[eeg_rows]).all():
+            # A gap is unmeasured EEG. It is neither a pulse-free baseline nor
+            # a valid interval for estimating spacing or clock locking.
+            self.verdict.setText("EEG gap — waiting for a continuous window")
+            self.verdict.setStyleSheet(self._banner_qss(palette.NEUTRAL))
+            self.detail.setText("EEG was paused for impedance measurement. Diagnostics resume "
+                                "when the missing interval leaves this window.")
+            self.metrics.clear()
+            self.per_channel.clear()
+            self._raw_curve.clear()
+            self._rep_curve.clear()
+            self._shape_curve.clear()
+            for pool in (self._pulse_lines, self._loss_lines, self._marker_lines):
+                while pool:
+                    self._timeline.removeItem(pool.pop())
+            self._current_ch = None
+            self._last_analysis = 0.0
+            return
         active_idx = [i for i in range(self._n)
                       if (active[i] if i < len(active) else True)]
         ch = self._choose_channel(active_idx, full, eeg_rows)

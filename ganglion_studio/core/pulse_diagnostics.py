@@ -31,7 +31,7 @@ VERDICT_BIOLOGICAL = "biological"      # spacing wanders -> looks like a real si
 VERDICT_INCONCLUSIVE = "inconclusive"
 
 
-def detect_pulses(signal: np.ndarray, sr: int, *, sigma: float = 8.0,
+def detect_pulses(signal: np.ndarray, sr: float, *, sigma: float = 8.0,
                   min_gap_s: float = 0.8) -> np.ndarray:
     """Indices of large, isolated deflections ("pulses") in ``signal``.
 
@@ -53,7 +53,7 @@ def detect_pulses(signal: np.ndarray, sr: int, *, sigma: float = 8.0,
     return peaks.astype(int)
 
 
-def spacing_stats(peaks: np.ndarray, sr: int) -> Dict[str, float]:
+def spacing_stats(peaks: np.ndarray, sr: float) -> Dict[str, float]:
     """Inter-pulse spacing summary.
 
     ``jitter_ms`` is the std of the spacing: a clock-locked artifact has a few ms;
@@ -74,7 +74,7 @@ def spacing_stats(peaks: np.ndarray, sr: int) -> Dict[str, float]:
     }
 
 
-def phase_concentration(peaks: np.ndarray, sr: int) -> Dict[str, float]:
+def phase_concentration(peaks: np.ndarray, sr: float) -> Dict[str, float]:
     """How tightly the pulses lock to a constant phase within the 1 s frame.
 
     ``r``=1.0 -> every pulse at the same sample-of-second (frame-locked, the
@@ -113,7 +113,7 @@ def loss_coincidence(peaks: np.ndarray, anomaly_flags: np.ndarray, *,
             "n_anomalies": int(anomalies.size)}
 
 
-def pulse_triggered_average(signal: np.ndarray, peaks: np.ndarray, sr: int, *,
+def pulse_triggered_average(signal: np.ndarray, peaks: np.ndarray, sr: float, *,
                             half_s: float = 0.1) -> Tuple[np.ndarray, np.ndarray]:
     """Average waveform in a +/- ``half_s`` window around each pulse.
 
@@ -194,7 +194,7 @@ class DiagnosticResult:
     peaks: np.ndarray = field(default_factory=lambda: np.empty(0, dtype=int))
 
 
-def diagnose(signal: np.ndarray, sr: int,
+def diagnose(signal: np.ndarray, sr: float,
              anomaly_flags: Optional[np.ndarray] = None, *,
              sigma: float = 8.0) -> DiagnosticResult:
     """Run the full pulse characterization on one channel.
@@ -203,6 +203,14 @@ def diagnose(signal: np.ndarray, sr: int,
     the loss-coincidence test -- the live BLE-loss flags, or offline timestamp
     anomalies. When omitted, the coincidence test is simply skipped.
     """
+    if not np.isfinite(np.asarray(signal, dtype=float)).all():
+        return DiagnosticResult(
+            n_pulses=0, rate_hz=0.0, jitter_ms=0.0, phase_r=0.0,
+            loss_fraction=0.0, loss_chance=0.0, n_anomalies=0,
+            verdict=VERDICT_INCONCLUSIVE,
+            message="This window contains unmeasured EEG. Select a continuous measured "
+                    "section before classifying pulses.",
+        )
     peaks = detect_pulses(signal, sr, sigma=sigma)
     spacing = spacing_stats(peaks, sr)
     phase = phase_concentration(peaks, sr)
