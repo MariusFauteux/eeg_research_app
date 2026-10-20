@@ -65,6 +65,8 @@ class ProcessingWorker(QThread):
 class ProcessingWindow(QWidget):
     """Standalone window: configuration on the left, original/processed on the right."""
 
+    shutdown_finished = pyqtSignal()
+
     def __init__(self, initial_path: Optional[str] = None) -> None:
         super().__init__()
         self.setWindowTitle("Processing Lab")
@@ -73,6 +75,10 @@ class ProcessingWindow(QWidget):
         self._rec: Optional[LoadedRecording] = None
         self._processed: Optional[np.ndarray] = None
         self._worker: Optional[ProcessingWorker] = None
+        self._recompute_pending = False
+        self._closing = False
+        self._closed = False
+        self._recording_generation = 0
         self._orig_curves: List[pg.PlotDataItem] = []
         self._proc_curves: List[pg.PlotDataItem] = []
         self._analysis_windows: List[AnalysisWindow] = []
@@ -423,6 +429,8 @@ class ProcessingWindow(QWidget):
             self._load(path)
 
     def _load(self, path: str) -> None:
+        if self._closing:
+            return
         try:
             rec = load_recording(path)
         except LoadError as exc:
@@ -431,6 +439,7 @@ class ProcessingWindow(QWidget):
         if rec.n_channels == 0 or rec.n_samples == 0:
             QMessageBox.warning(self, "Load failed", "Recording has no usable channels.")
             return
+        self._recording_generation += 1
         self._rec = rec
         self._processed = rec.eeg.copy()
         dur = rec.n_samples / rec.sampling_rate
@@ -452,15 +461,27 @@ class ProcessingWindow(QWidget):
         self._recompute()
 
     def _open_analysis(self) -> None:
-        if self._rec is None:
+        if self._closing or self._rec is None:
+            return
+        metas = self.channel_metas(enabled_only=True)
+        if not metas:
+            QMessageBox.warning(self, "No channels selected",
+                                "Enable at least one channel before generating analysis plots.")
             return
         processed = self._processed if self._processed is not None else self._rec.eeg
+        if not np.all(np.isfinite(self._rec.eeg)) or not np.all(np.isfinite(processed)):
+            QMessageBox.warning(
+                self, "Select continuous EEG",
+                "This recording contains an EEG interruption. Crop a continuous EEG "
+                "interval in the recording editor before generating an analysis report.",
+            )
+            return
         title = os.path.basename(self._rec.source_path) or "Recording"
         window = AnalysisWindow(
             processed=np.ascontiguousarray(processed),
             original=np.ascontiguousarray(self._rec.eeg),
             sampling_rate=self._rec.sampling_rate,
-            metas=self.channel_metas(enabled_only=True),
+            metas=metas,
             title=title,
         )
         window.show()
@@ -560,13 +581,14 @@ class ProcessingWindow(QWidget):
 
     # ----------------------------------------------------------- recompute
     def _schedule(self, *_args) -> None:
-        if self._rec is not None:
+        if not self._closing and self._rec is not None:
             self._debounce.start()
 
     def _build_config(self) -> proc.ProcessingConfig:
         c = proc.ProcessingConfig()
         c.repair_gaps = self.repair_chk.isChecked()
         c.loss_samples = list(self._rec.loss_samples) if self._rec is not None else []
+        c.loss_lengths = list(self._rec.loss_lengths) if self._rec is not None else []
         c.reref_car = self.reref_chk.isChecked()
         c.detrend = self.detrend_combo.currentText()
         c.filters.enabled = self.filter_box.isChecked()
@@ -595,29 +617,74 @@ class ProcessingWindow(QWidget):
         return c
 
     def _recompute(self) -> None:
-        if self._rec is None:
+        if self._closing or self._rec is None:
             return
-        if self._worker is not None and self._worker.isRunning():
-            self._debounce.start()  # retry shortly
+        self._debounce.stop()
+        if self._worker is not None:
+            self._recompute_pending = True
             return
+        self._recompute_pending = False
         self.status.setText("Processing...")
         self.apply_btn.setEnabled(False)
         config = self._build_config()
         self._worker = ProcessingWorker(self._rec.eeg, self._rec.sampling_rate,
                                         self._rec.channel_names, config)
+        self._worker.recording_generation = self._recording_generation
         self._worker.done.connect(self._on_processed)
         self._worker.failed.connect(self._on_failed)
+        self._worker.finished.connect(self._on_worker_finished)
         self._worker.start()
 
+    def _on_worker_finished(self) -> None:
+        worker = self.sender()
+        if worker is not self._worker:
+            return
+        self._worker = None
+        worker.deleteLater()
+        if self._closing:
+            self.close()
+        elif self._recompute_pending:
+            self._debounce.start()
+
     def _on_processed(self, processed, messages: list) -> None:
+        if self._closing:
+            return
+        worker = self.sender()
+        if worker is not None and (worker is not self._worker or
+                                   worker.recording_generation != self._recording_generation):
+            return
         self._processed = processed
         self.apply_btn.setEnabled(True)
         self.status.setText("\n".join(messages) if messages else "No steps enabled.")
         self._redraw(self._proc_plot, self._proc_curves, processed)
 
     def _on_failed(self, message: str) -> None:
+        if self._closing:
+            return
+        worker = self.sender()
+        if worker is not None and (worker is not self._worker or
+                                   worker.recording_generation != self._recording_generation):
+            return
         self.apply_btn.setEnabled(True)
         self.status.setText(f"Processing failed: {message}")
+
+    def closeEvent(self, event) -> None:  # noqa: N802 - Qt override
+        self._closing = True
+        self._debounce.stop()
+        self._recompute_pending = False
+        self.open_btn.setEnabled(False)
+        self.apply_btn.setEnabled(False)
+        if self._worker is not None:
+            self._worker.requestInterruption()
+            self.status.setText("Finishing processing before closing...")
+            event.ignore()
+            return
+        for window in self._analysis_windows:
+            window.close()
+        super().closeEvent(event)
+        if not self._closed:
+            self._closed = True
+            self.shutdown_finished.emit()
 
     # ------------------------------------------------------------- drawing
     def _on_view_mode(self, *_args) -> None:

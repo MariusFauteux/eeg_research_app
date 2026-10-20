@@ -7,6 +7,7 @@ bleak>=0.21
 pyserial>=3.5  # BLED112 dongle serial-port discovery (native BLE works without it)
 numpy>=1.24
 scipy>=1.10
+matplotlib>=3.7  # analysis UI is imported at application startup
 
 # Optional: recording review/export to research formats.
 # The app runs fine without these; export entries are disabled if missing.

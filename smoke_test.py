@@ -12,6 +12,8 @@ import time
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import glob
+import tempfile
+import numpy as np
 # Snapshot any recordings that already exist so teardown only deletes what THIS
 # run creates. The cleanup must NEVER remove the user's existing recordings.
 _recordings_existed = os.path.isdir("recordings")
@@ -24,11 +26,14 @@ QMessageBox.information = staticmethod(lambda *a, **k: None)
 QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes)
 
 from ganglion_studio.core.board_manager import BoardManager
+from ganglion_studio.core import protocol_config
 from ganglion_studio.core.dsp import FilterSettings
 from ganglion_studio.core.session import SessionConfig
 from ganglion_studio.ui.session_view import SessionView
 
 app = QApplication([])
+# Keep smoke-test protocol settings separate from the user's preferences.
+protocol_config.PATH = os.path.join(tempfile.mkdtemp(prefix="ganglion-smoke-"), "protocols.json")
 
 config = SessionConfig(name="smoke test", demo=True, notch_freq=50)
 mgr = BoardManager(demo=True)
@@ -90,22 +95,87 @@ view._on_filters_changed(FilterSettings(bp_low=2.0, bp_high=40.0, notch_freq=60)
 view.time_series.update_plot(view._settings, view._active)
 print("filters applied")
 
-# Impedance mode.
-view.impedance._on_toggle(True)
-time.sleep(0.3)
-view.impedance.update_plot(view._settings, view._active)
-print("impedance kohm:", [round(x, 1) for x in mgr.latest_impedance_kohm()])
-view.impedance._on_toggle(False)
+# Impedance checks become available after recording starts.
+assert not view.impedance_btn.isEnabled()
+assert view.impedance.current_table.rowCount() == 5
+assert mgr.acquisition_mode == "eeg"
 
 # Recording + markers (data captured by the acquisition thread).
 view.record_btn.setChecked(True)
 time.sleep(1.2)
 view._on_marker(3, "Stimulus", time.time())
 view.marker_panel.fire(view.marker_panel._types[0])
+_continuous_eeg = mgr.recent(5.0)
+view.impedance_duration.setValue(1)
+view.impedance_btn.click()
+_deadline = time.monotonic() + 5
+while time.monotonic() < _deadline and (view._check_worker is not None or mgr.impedance_check_active):
+    app.processEvents()
+    time.sleep(0.005)
+assert view._check_worker is None and not mgr.impedance_check_active
+assert mgr.recording and mgr.streaming
+assert [e["code"] for e in mgr.impedance_check_events()] == [90, 91, 92, 93]
+assert mgr.recorded_impedance_checks()
+assert mgr.recorded_eeg_gaps()
+# Collect a fresh EEG section after the interruption.
+time.sleep(.3)
 view.record_btn.setChecked(False)
 rec = mgr.recorded_sample_count()
 print("recorded samples:", rec)
 assert rec > sr, "recording did not capture continuous data"
+_timed_review = view._reviews[-1]
+assert _timed_review._meta["impedance_file"]
+assert any(m.code == 93 for m in _timed_review._markers)
+assert np.isnan(_timed_review._raw[mgr.eeg_channels]).any()
+print("timed impedance check ok: four markers, explicit EEG gap and linked readings")
+
+# Protocol helper: run a tiny Blinks protocol and confirm it auto-starts
+# recording and drops one annotation per blink cue (audio is silent offscreen).
+pp = view.protocol_panel
+pp.proto_combo.setCurrentIndex(0)  # Blinks
+pp.blink_lead.setValue(0.0)
+pp.blink_per_set.setValue(2)
+pp.blink_sets.setValue(1)
+pp.blink_inter_blink.setValue(0.2)
+fired = {"n": 0}
+pp.marker.connect(lambda code, label: fired.__setitem__("n", fired["n"] + 1))
+pp._on_run_clicked()  # Start
+assert mgr.recording, "protocol did not auto-start recording"
+_deadline = time.time() + 3.0
+while time.time() < _deadline and pp._running:
+    app.processEvents()
+    time.sleep(0.01)
+assert not pp._running, "protocol did not finish on its own"
+assert fired["n"] == 2, f"expected 2 blink markers, got {fired['n']}"
+assert not mgr.recording, "protocol did not auto-stop the recording it started"
+assert not view.record_btn.isChecked(), "record button not released after protocol"
+print("protocol helper ok: blink markers fired =", fired["n"], "| auto-stopped recording")
+
+# Oddball (P300): a tiny seeded run drops one marker per trial with both codes.
+for _i in range(pp.proto_combo.count()):
+    if pp.proto_combo.itemData(_i) == "oddball":
+        pp.proto_combo.setCurrentIndex(_i)
+        break
+pp.odd_trials.setValue(8)
+pp.odd_isi.setValue(0.1)
+pp.odd_jitter.setValue(0.0)
+pp.odd_lead.setValue(0.0)
+pp.odd_target.setValue(0.25)
+pp.odd_minstd.setValue(1)
+pp.odd_seed.setValue(7)
+odd_codes = []
+pp.marker.connect(lambda code, label: odd_codes.append(code))
+pp._on_run_clicked()
+_deadline = time.time() + 3.0
+while time.time() < _deadline and pp._running:
+    app.processEvents()
+    time.sleep(0.005)
+assert not pp._running, "oddball did not finish"
+assert len(odd_codes) == 8, f"expected 8 oddball markers, got {len(odd_codes)}"
+assert 6 in odd_codes and 7 in odd_codes, "oddball missing standard(6)/target(7) codes"
+if mgr.recording:
+    view.record_btn.setChecked(False)
+print("oddball ok: trials =", len(odd_codes), "| codes =", sorted(set(odd_codes)))
 
 # Signal statistics panel.
 view.stats_panel.update_stats(view._settings, view._active)
@@ -128,12 +198,12 @@ assert view.spectrogram.ch_combo.itemText(0) == "Fp1", "spectrogram relabel fail
 print("channel relabel ok:", mgr.channel_names)
 
 # Recording review + export.
-import tempfile
-import numpy as np
 from ganglion_studio.ui.review_window import ReviewWindow
 from ganglion_studio.core import exporter
 
-raw = mgr.recent(5.0)
+# Use the measured section captured before the explicit interruption for these
+# general export/editor checks; the timed review above exercises the gapped data.
+raw = _continuous_eeg.copy()
 # Inject a couple of markers directly into the recorded marker row for review.
 mch = mgr.marker_channel
 raw[mch, 100] = 1
@@ -203,7 +273,7 @@ from ganglion_studio.ui.processing_window import ProcessingWindow
 from ganglion_studio.core.session import SessionRecorder, SessionConfig as SC
 
 # Write a real recording file via the recorder, then load it back.
-rec_raw = mgr.recent(8.0)
+rec_raw = _continuous_eeg.copy()
 sr2 = mgr.sampling_rate
 rmeta = {
     "sampling_rate": sr2,
@@ -226,6 +296,46 @@ assert loaded.channel_names[0] == "Fp1", "channel name not persisted"
 assert loaded.electrodes and loaded.electrodes[0] == "PEDOT:PSS", "electrode not persisted"
 assert loaded.channel_types and loaded.channel_types[3] == "ECG", "type not persisted"
 print("channel config persisted:", loaded.channel_types, loaded.electrodes)
+
+# --- Rebuild .fif from the session CSV (must be raw, never display-filtered) ---
+import json
+
+from ganglion_studio.core import rebuild_fif
+
+rb = rebuild_fif.rebuild(csv_path, os.path.join(tmp, "rebuilt.fif"))
+rb_back = load_recording(rb.fif_path)
+assert rb_back.eeg.shape == loaded.eeg.shape, "rebuild changed the shape"
+assert np.allclose(rb_back.eeg, loaded.eeg, atol=1e-3), "rebuilt fif differs from the CSV"
+assert rb_back.channel_names == loaded.channel_names, "rebuild lost the channel names"
+print(f"rebuild ok: {rb.n_channels} ch | {rb.n_markers} markers | "
+      f"max diff {np.abs(rb_back.eeg - loaded.eeg).max():.2e} uV")
+
+# --- Recording Editor: drop unticked channels on save ---
+from ganglion_studio.ui import fif_editor_window as FE
+
+editor_out = os.path.join(tmp, "edited_raw.fif")  # exporter forces the _raw.fif suffix
+FE.QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (editor_out, ""))
+FE.QMessageBox.information = staticmethod(lambda *a, **k: None)
+editor = FE.RecordingEditorWindow(rb.fif_path)
+assert len(editor._keep_checks) == loaded.n_channels
+editor._keep_checks[2].setChecked(False)          # drop one channel
+assert editor._kept_indices() == [0, 1, 3]
+assert len(editor._curves[2].getData()[0] or []) == 0, "dropped channel still plotted"
+editor.keep_from.setValue(1.0)                     # crop as well
+editor.keep_to.setValue(4.0)
+editor._on_save()
+edited = load_recording(editor_out)
+assert edited.n_channels == 3, f"expected 3 channels, got {edited.n_channels}"
+assert edited.n_samples == 3 * loaded.sampling_rate, "crop not applied"
+crop_start = int(round(loaded.sampling_rate))
+crop_end = int(round(4 * loaded.sampling_rate))
+assert np.allclose(edited.eeg,
+                   loaded.eeg[[0, 1, 3], crop_start:crop_end],
+                   atol=1e-3), "kept channels do not match the source"
+side = json.load(open(os.path.splitext(editor_out)[0] + "_meta.json", encoding="utf-8"))
+assert len(side["channel_names"]) == 3 and side["channel_active"] == [True] * 3
+editor.close()
+print("channel drop ok:", edited.channel_names, "| dropped 1 of", loaded.n_channels)
 
 # AAS: synthesize an ECG-like reference with known R-peaks + artifact, verify reduction.
 n2 = sr2 * 20
@@ -356,4 +466,32 @@ if not _recordings_existed and os.path.isdir("recordings") and not os.listdir("r
 view.shutdown()
 mgr.release()
 assert not (mgr._acq_thread and mgr._acq_thread.is_alive()), "acquisition thread not stopped"
+
+# A dedicated demo session captures fresh per-channel impedance events, records
+# them independently of rendering and reopens the saved series without EEG files.
+from ganglion_studio.ui.impedance_session_view import ImpedanceSessionView
+from ganglion_studio.core.impedance_recording import load_impedance_recording
+
+with tempfile.TemporaryDirectory() as imp_dir:
+    imp_mgr = BoardManager(demo=True, acquisition_mode="impedance")
+    imp_mgr.prepare()
+    imp_mgr.start()
+    imp_view = ImpedanceSessionView(imp_mgr, SessionConfig(
+        name="impedance-smoke", demo=True, acquisition_mode="impedance"), base_dir=imp_dir)
+    try:
+        imp_view.record_btn.setChecked(True)
+        time.sleep(1.2)
+        imp_view._tick()
+        imp_view.record_btn.setChecked(False)
+        imp_rec = load_impedance_recording(imp_view._last_saved_paths[0])
+        assert {reading.channel for reading in imp_rec.readings} == set(range(5))
+        assert imp_rec.channel_names[-1] == "REF"
+        assert imp_mgr._filled == 0, "impedance measurements entered the EEG ring"
+        assert not glob.glob(os.path.join(imp_dir, "**", "*_raw.csv"), recursive=True)
+        assert all(_nx(curve) > 0 for curve in imp_view.time_series.curves)
+        print("impedance session ok:", len(imp_rec.readings), "measurements | 4 channels + REF | CSV reopened")
+    finally:
+        imp_view.shutdown()
+        imp_mgr.release()
+        imp_view.close()
 print("SMOKE TEST PASSED")

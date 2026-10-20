@@ -55,6 +55,8 @@ class Dashboard(QWidget):
     start_session = pyqtSignal(object)  # emits SessionConfig
     open_processing = pyqtSignal()  # request to open the Processing Lab
     open_editor = pyqtSignal()  # request to open the Recording Editor
+    rebuild_fif = pyqtSignal()  # request to rebuild a .fif from a session CSV
+    open_impedance_recording = pyqtSignal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -86,6 +88,14 @@ class Dashboard(QWidget):
         self.editor_btn.setToolTip("Open a saved .fif to crop, edit markers and channel info")
         self.editor_btn.clicked.connect(self.open_editor.emit)
         header.addWidget(self.editor_btn, alignment=Qt.AlignmentFlag.AlignTop)
+
+        self.rebuild_btn = QPushButton("Rebuild .fif from CSV…")
+        self.rebuild_btn.setToolTip(
+            "Regenerate a .fif from a session's original _raw.csv\n"
+            "(with its _meta.json and _markers.csv) - always unfiltered raw data"
+        )
+        self.rebuild_btn.clicked.connect(self.rebuild_fif.emit)
+        header.addWidget(self.rebuild_btn, alignment=Qt.AlignmentFlag.AlignTop)
         root.addLayout(header)
 
         body = QHBoxLayout()
@@ -141,6 +151,15 @@ class Dashboard(QWidget):
         self.name_edit.textChanged.connect(self._update_start_enabled)
         form.addRow("Session name", self.name_edit)
 
+        self.acquisition_combo = QComboBox()
+        self.acquisition_combo.addItem("EEG", "eeg")
+        self.acquisition_combo.addItem("Impedance only", "impedance")
+        form.addRow("Capture", self.acquisition_combo)
+        self.mode_hint = QLabel("Measure channel contact over time. EEG is paused in impedance mode.")
+        self.mode_hint.setWordWrap(True)
+        self.mode_hint.setStyleSheet(theme.HINT_QSS)
+        form.addRow(self.mode_hint)
+
         self.conn_combo = QComboBox()
         # "Custom" = our bleak driver (no once-per-second pulse); "BrainFlow" =
         # the stock native backend, kept for comparison/fallback.
@@ -177,6 +196,16 @@ class Dashboard(QWidget):
         self.fw_combo.addItems(["3 (default)", "2 (legacy)", "auto"])
         form.addRow("Firmware", self.fw_combo)
 
+        self.impedance_units_combo = QComboBox()
+        self.impedance_units_combo.addItem("Modern firmware (kΩ readings)", "kohms")
+        self.impedance_units_combo.addItem("Legacy firmware (Ω readings)", "ohms")
+        self.impedance_units_combo.setToolTip(
+            "Match the firmware on your board. The current published firmware sends kΩ; "
+            "legacy firmware sends Ω. Both are saved in Ω and plotted in kΩ."
+        )
+        form.addRow("Impedance scale", self.impedance_units_combo)
+        self.fw_combo.currentTextChanged.connect(self._on_firmware_changed)
+
         self.decode_combo = QComboBox()
         self.decode_combo.addItems(["Delta (firmware ≤ 2.x)", "MSB (firmware 3.0.2+)"])
         self.decode_combo.setToolTip(
@@ -202,9 +231,34 @@ class Dashboard(QWidget):
         self.start_btn.clicked.connect(self._on_start)
         self.start_btn.setEnabled(False)
         form.addRow(self.start_btn)
+        self.open_impedance_btn = QPushButton("Open impedance recording…")
+        self.open_impedance_btn.clicked.connect(self.open_impedance_recording.emit)
+        form.addRow(self.open_impedance_btn)
         body.addWidget(setup_box, 1)
 
         self._refresh_saved()
+        self.acquisition_combo.currentIndexChanged.connect(self._update_acquisition_ui)
+        self._update_acquisition_ui()
+
+    def _on_firmware_changed(self, text: str) -> None:
+        if text.startswith("2"):
+            self.impedance_units_combo.setCurrentIndex(1)
+        elif text.startswith("3"):
+            self.impedance_units_combo.setCurrentIndex(0)
+
+    def _update_acquisition_ui(self, *_args) -> None:
+        impedance = self.acquisition_combo.currentData() == "impedance"
+        self._form.setRowVisible(self.impedance_units_combo, True)
+        self._form.setRowVisible(self.mode_hint, True)
+        self.mode_hint.setText(
+            "Measure channel contact over time. EEG is paused in impedance mode."
+            if impedance else
+            "EEG recordings support timed impedance checks, with marked interruptions."
+        )
+        self.notch_combo.setEnabled(not impedance)
+        self.decode_combo.setEnabled(not impedance and not self.demo_check.isChecked()
+                                     and self.conn_combo.currentText().endswith("(Custom)"))
+        self.impedance_units_combo.setEnabled(not self.demo_check.isChecked())
 
     # --------------------------------------------------------- saved devices
     def _refresh_saved(self, select_address: Optional[str] = None) -> None:
@@ -324,7 +378,7 @@ class Dashboard(QWidget):
         self.scan_box.setEnabled(native_live)
         self.mac_edit.setEnabled(native_live)
         self.fw_combo.setEnabled(not demo)  # firmware applies to the dongle too
-        self.decode_combo.setEnabled(native_live)  # custom native driver only
+        self._update_acquisition_ui()
         self._form.setRowVisible(self._port_row, dongle and not demo)
         if dongle and not demo:
             if self.port_combo.count() == 0:
@@ -371,5 +425,7 @@ class Dashboard(QWidget):
             notch_freq=notch,
             use_custom_native=self.conn_combo.currentText().endswith("(Custom)"),
             decode_mode="msb" if self.decode_combo.currentIndex() == 1 else "delta",
+            acquisition_mode=self.acquisition_combo.currentData(),
+            impedance_units=self.impedance_units_combo.currentData(),
         )
         self.start_session.emit(config)

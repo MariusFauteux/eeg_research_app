@@ -43,6 +43,8 @@ from ganglion_studio.core import board_config as cfg
 from ganglion_studio.core import exporter, recording_loader
 from ganglion_studio.core.dsp import FilterSettings, apply_filters
 from ganglion_studio.core.exporter import ReviewMarker
+from ganglion_studio.core.packet_loss import crop_loss_spans
+from ganglion_studio.core.eeg_gaps import crop_eeg_gaps
 from ganglion_studio.ui import theme
 
 
@@ -69,6 +71,11 @@ class RecordingEditorWindow(QMainWindow):
         self._place_combos: List[QComboBox] = []
         self._type_combos: List[QComboBox] = []
         self._elec_combos: List[QComboBox] = []
+        self._keep_checks: List[QCheckBox] = []
+        self._chan_labels: List[QLabel] = []
+        # Channels that are flat zero for the whole recording - the board sends
+        # 0.00 for a switched-off channel, so these carry no signal at all.
+        self._flat: List[bool] = []
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -237,6 +244,23 @@ class RecordingEditorWindow(QMainWindow):
         self._chan_grid = QGridLayout(self._chan_container)
         scroll.setWidget(self._chan_container)
         chan_outer.addWidget(scroll)
+
+        drop_row = QHBoxLayout()
+        self.drop_unused_btn = QPushButton("Untick unused")
+        self.drop_unused_btn.setToolTip(
+            "Untick every channel that is flat zero for the whole recording"
+        )
+        self.drop_unused_btn.clicked.connect(self._on_untick_unused)
+        drop_row.addWidget(self.drop_unused_btn)
+        keep_all_btn = QPushButton("Keep all")
+        keep_all_btn.clicked.connect(self._on_keep_all)
+        drop_row.addWidget(keep_all_btn)
+        chan_outer.addLayout(drop_row)
+
+        chan_hint = QLabel("Unticked channels are hidden here and left out of the saved file.")
+        chan_hint.setStyleSheet(theme.HINT_QSS)
+        chan_hint.setWordWrap(True)
+        chan_outer.addWidget(chan_hint)
         layout.addWidget(chan_box, 1)
 
         return panel
@@ -262,7 +286,7 @@ class RecordingEditorWindow(QMainWindow):
             return
 
         self._rec = rec
-        self._sr = int(rec.sampling_rate) or 200
+        self._sr = float(rec.sampling_rate)
         self._names = list(rec.channel_names)
         self._n = rec.n_channels
         self._total = rec.n_samples
@@ -270,6 +294,7 @@ class RecordingEditorWindow(QMainWindow):
         self._markers = list(rec.markers)
         self._filter = FilterSettings()
         self._click_time = None
+        self._flat = [bool(np.all(rec.eeg[i, :] == 0.0)) for i in range(self._n)]
         self.setWindowTitle(f"Recording Editor - {os.path.basename(path)}")
 
         self._rebuild_curves()
@@ -319,35 +344,100 @@ class RecordingEditorWindow(QMainWindow):
         self._place_combos = []
         self._type_combos = []
         self._elec_combos = []
+        self._keep_checks = []
+        self._chan_labels = []
 
-        for c, header in enumerate(["Channel", "Placement", "Type", "Electrode"]):
+        for c, header in enumerate(["Keep", "Channel", "Placement", "Type", "Electrode"]):
             lab = QLabel(header)
             lab.setStyleSheet("font-weight:600;")
             self._chan_grid.addWidget(lab, 0, c)
 
         rec = self._rec
         for i in range(self._n):
-            self._chan_grid.addWidget(QLabel(self._names[i]), i + 1, 0)
+            keep = QCheckBox()
+            keep.setChecked(self._initial_keep(i))
+            keep.setToolTip("Untick to leave this channel out of the saved file")
+            self._chan_grid.addWidget(keep, i + 1, 0)
+            self._keep_checks.append(keep)
+
+            name = self._names[i]
+            if self._flat[i]:
+                name += "  (flat)"
+            label = QLabel(name)
+            label.setToolTip(
+                "Flat zero for the whole recording - this channel was switched off"
+                if self._flat[i] else ""
+            )
+            self._chan_grid.addWidget(label, i + 1, 1)
+            self._chan_labels.append(label)
 
             place = QComboBox()
             place.addItems(cfg.TEN_TWENTY)
             place.setCurrentText(self._initial_placement(i))
-            self._chan_grid.addWidget(place, i + 1, 1)
+            self._chan_grid.addWidget(place, i + 1, 2)
             self._place_combos.append(place)
 
             tcombo = QComboBox()
             tcombo.addItems(cfg.CHANNEL_TYPES)
             saved_t = rec.channel_types[i] if rec and i < len(rec.channel_types) else "EEG"
             tcombo.setCurrentText(saved_t or "EEG")
-            self._chan_grid.addWidget(tcombo, i + 1, 2)
+            self._chan_grid.addWidget(tcombo, i + 1, 3)
             self._type_combos.append(tcombo)
 
             ecombo = QComboBox()
             ecombo.addItems(cfg.ELECTRODES)
             saved_e = rec.electrodes[i] if rec and i < len(rec.electrodes) else cfg.ELECTRODES[0]
             ecombo.setCurrentText(saved_e or cfg.ELECTRODES[0])
-            self._chan_grid.addWidget(ecombo, i + 1, 3)
+            self._chan_grid.addWidget(ecombo, i + 1, 4)
             self._elec_combos.append(ecombo)
+
+        # Connected only once every row exists, so the initial setChecked() calls
+        # above cannot fire the handler against a half-built grid.
+        for check in self._keep_checks:
+            check.toggled.connect(self._on_keep_toggled)
+        self._update_channel_row_styles()
+
+    def _initial_keep(self, i: int) -> bool:
+        """Tick a channel unless the recording says it carried nothing.
+
+        A flat-zero channel was switched off at the board, and ``channel_active``
+        (written by newer recordings) says the same thing explicitly - either way
+        there is no signal to keep, so start it unticked. The user can override.
+        """
+        if self._flat[i]:
+            return False
+        rec = self._rec
+        if rec and i < len(rec.channel_active):
+            return bool(rec.channel_active[i])
+        return True
+
+    def _kept_indices(self) -> List[int]:
+        """Row indices of the ticked channels (all of them before any load)."""
+        if not self._keep_checks:
+            return list(range(self._n))
+        return [i for i, c in enumerate(self._keep_checks) if c.isChecked()]
+
+    def _on_keep_toggled(self, *_args) -> None:
+        self._update_channel_row_styles()
+        self._redraw()
+        self._update_info()
+
+    def _on_untick_unused(self) -> None:
+        for i, check in enumerate(self._keep_checks):
+            if self._flat[i]:
+                check.setChecked(False)
+
+    def _on_keep_all(self) -> None:
+        for check in self._keep_checks:
+            check.setChecked(True)
+
+    def _update_channel_row_styles(self) -> None:
+        """Grey out the rows that will not be saved."""
+        for i, label in enumerate(self._chan_labels):
+            keep = self._keep_checks[i].isChecked()
+            label.setStyleSheet("" if keep else theme.MUTED_QSS)
+            for combos in (self._place_combos, self._type_combos, self._elec_combos):
+                combos[i].setEnabled(keep)
 
     def _initial_placement(self, i: int) -> str:
         rec = self._rec
@@ -396,17 +486,22 @@ class RecordingEditorWindow(QMainWindow):
         amp = self.amp_spin.value()
         spacing = amp * 2.2
         ticks = []
+        kept = self._kept_indices()
+        n_kept = max(1, len(kept))
         for i in range(self._n):
+            if i not in kept:  # unticked: hide the trace, it is not being saved
+                self._curves[i].setData([], [])
+                continue
             y = np.ascontiguousarray(self._rec.eeg[i, :], dtype=np.float64)
             if self.filter_chk.isChecked():
                 y = apply_filters(y, self._sr, self._filter)
-            offset = (self._n - 1 - i) * spacing
+            offset = (n_kept - 1 - kept.index(i)) * spacing
             self._curves[i].setData(t, y + offset)
             self._curves[i].setDownsampling(auto=True, method="peak")
             self._curves[i].setClipToView(True)
             ticks.append((offset, self._names[i] if i < len(self._names) else f"Ch{i+1}"))
         self._plot.getAxis("left").setTicks([ticks])
-        self._plot.setYRange(-spacing, self._n * spacing, padding=0)
+        self._plot.setYRange(-spacing, n_kept * spacing, padding=0)
         self._draw_marker_lines()
         self._on_view_changed()
 
@@ -493,8 +588,10 @@ class RecordingEditorWindow(QMainWindow):
         if self._rec is None:
             self._info_label.setText("No recording loaded")
             return
+        n_kept = len(self._kept_indices())
+        chans = f"{self._n} ch" if n_kept == self._n else f"{n_kept}/{self._n} ch kept"
         self._info_label.setText(
-            f"{self._n} ch | {self._sr} Hz | {self._duration:0.1f} s | "
+            f"{chans} | {self._sr} Hz | {self._duration:0.1f} s | "
             f"{len(self._markers)} markers"
         )
 
@@ -509,6 +606,11 @@ class RecordingEditorWindow(QMainWindow):
             else:
                 out.append(place)
         return out
+
+    @staticmethod
+    def _pick(values: List, rows: List[int]) -> List:
+        """The entries of ``values`` at ``rows`` (the ticked channels)."""
+        return [values[i] for i in rows if i < len(values)]
 
     def _on_save(self) -> None:
         if self._rec is None or self._total == 0:
@@ -530,16 +632,25 @@ class RecordingEditorWindow(QMainWindow):
             QMessageBox.warning(self, "Empty range",
                                 "Keep-to must be after Keep-from.")
             return
-        cropped = np.ascontiguousarray(self._rec.eeg[:, s0:s1], dtype=np.float64)
+
+        # Unticked channels are left out of the file entirely.
+        rows = self._kept_indices()
+        if not rows:
+            QMessageBox.warning(self, "No channels kept",
+                                "Tick at least one channel to save.")
+            return
+        cropped = np.ascontiguousarray(self._rec.eeg[np.ix_(rows, range(s0, s1))],
+                                       dtype=np.float64)
 
         # Shift markers into the cropped window; drop those outside it.
         remapped = [ReviewMarker(m.sample - s0, m.code, m.label)
                     for m in self._markers if s0 <= m.sample < s1]
 
-        names = self._edited_names()
-        placements = [c.currentText() for c in self._place_combos]
-        types = [c.currentText() for c in self._type_combos]
-        electrodes = [c.currentText() for c in self._elec_combos]
+        names = self._pick(self._edited_names(), rows)
+        placements = self._pick([c.currentText() for c in self._place_combos], rows)
+        types = self._pick([c.currentText() for c in self._type_combos], rows)
+        electrodes = self._pick([c.currentText() for c in self._elec_combos], rows)
+        dropped = [self._names[i] for i in range(self._n) if i not in rows]
 
         default_name = os.path.basename(self._rec.source_path) or "recording.fif"
         start_dir = os.path.join(self._default_dir(), default_name)
@@ -550,9 +661,15 @@ class RecordingEditorWindow(QMainWindow):
 
         meta = {
             "sampling_rate": self._sr,
-            "eeg_channels": list(range(self._n)),
+            "eeg_channels": list(range(len(rows))),
             "channel_names": names,
+            "channel_types": types,
         }
+        gaps = crop_loss_spans(self._rec.loss_samples, self._rec.loss_lengths, s0, s1)
+        meta["loss_samples"] = [sample for sample, length in gaps]
+        meta["loss_lengths"] = [length for sample, length in gaps]
+        meta["eeg_gaps"] = crop_eeg_gaps(self._rec.eeg_gaps, s0, s1, self._sr)
+        meta["impedance_file"] = self._rec.impedance_path
         try:
             written = exporter.export(path, "fif", cropped, meta, remapped)
         except exporter.ExportError as exc:
@@ -563,21 +680,25 @@ class RecordingEditorWindow(QMainWindow):
             return
 
         self._write_sidecar(written, names, types, electrodes, placements)
-        QMessageBox.information(self, "Saved", f"Saved:\n{written}")
+        note = f"\n\nLeft out: {', '.join(dropped)}" if dropped else ""
+        QMessageBox.information(
+            self, "Saved",
+            f"Saved:\n{written}\n\n{len(names)} channels: {', '.join(names)}{note}",
+        )
 
     def _write_sidecar(self, fif_path: str, names: List[str], types: List[str],
                        electrodes: List[str], placements: List[str]) -> None:
         """Write the channel edits .fif cannot store to a sibling _meta.json.
 
         Uses the same base-name convention the loader looks for, so re-opening
-        the saved file restores these edits.
+        the saved file restores these edits. Describes the *saved* channels only:
+        unticked ones are not in the file, so every channel here is active.
         """
-        active = list(self._rec.channel_active) if self._rec else []
-        if len(active) != self._n:
-            active = [True] * self._n
+        n = len(names)
+        active = [True] * n
         meta = {
             "sampling_rate": self._sr,
-            "eeg_channels": list(range(self._n)),
+            "eeg_channels": list(range(n)),
             "channel_names": names,
             "channel_types": types,
             "electrodes": electrodes,

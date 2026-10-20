@@ -5,9 +5,10 @@ lets a reloaded recording tell "off on purpose" apart from "on but dead".
 """
 
 import numpy as np
+import pytest
 
 from ganglion_studio.core.session import MarkerEvent, SessionConfig, SessionRecorder
-from ganglion_studio.core.recording_loader import load_recording
+from ganglion_studio.core.recording_loader import LoadError, load_recording
 
 
 def _raw():
@@ -80,3 +81,26 @@ def test_channel_active_absent_loads_empty(tmp_path):
     csv = [p for p in paths if p.endswith("_raw.csv")][0]
     loaded = load_recording(csv)
     assert loaded.channel_active == []
+
+
+def test_channel_placements_round_trip_from_csv(tmp_path):
+    rec = SessionRecorder(SessionConfig(name="t"), base_dir=str(tmp_path))
+    rec.begin()
+    meta = _meta([True] * 4)
+    meta["placements"] = ["Fp1", "Fp2", "O1", "O2"]
+    paths = rec.save(_raw(), meta)
+
+    csv = [p for p in paths if p.endswith("_raw.csv")][0]
+    loaded = load_recording(csv)
+    assert loaded.placements == meta["placements"]
+
+
+def test_malformed_csv_metadata_raises_load_error(tmp_path):
+    from brainflow.data_filter import DataFilter
+
+    path = tmp_path / "session_raw.csv"
+    DataFilter.write_file(_raw(), str(path), "w")
+    (tmp_path / "session_meta.json").write_text('{"sampling_rate":', encoding="utf-8")
+
+    with pytest.raises(LoadError, match="Could not read recording metadata"):
+        load_recording(str(path))

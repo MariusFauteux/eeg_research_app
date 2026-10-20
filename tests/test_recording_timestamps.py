@@ -6,6 +6,7 @@ it with an evenly spaced ``t0 + i / sampling_rate`` acquisition clock.
 """
 
 import numpy as np
+import pytest
 
 from ganglion_studio.core.session import SessionConfig, SessionRecorder
 
@@ -14,8 +15,8 @@ def _recorder():
     return SessionRecorder(SessionConfig(name="t"))
 
 
-def test_acquisition_clock_is_evenly_spaced_and_monotonic():
-    sr = 200
+@pytest.mark.parametrize("sr", [200, 200.5])
+def test_acquisition_clock_is_evenly_spaced_and_monotonic(sr):
     ts_row = 13
     n = 8
     raw = np.zeros((15, n), dtype=np.float64)

@@ -27,10 +27,8 @@ dedicated **subprocess** whose ``asyncio.run`` owns the main thread. That also
 isolates native BLE crashes from the GUI. The parent-side client is a thin proxy
 that talks to the child over ``multiprocessing`` queues.
 
-Not implemented yet
--------------------
-Impedance (the ``z``/``Z`` LeadOff test) is *not* decoded here. In this mode the
-impedance panel shows "unknown"; use the BLED112 dongle for impedance checks.
+Impedance packets are decoded separately as timestamped per-channel events;
+they never become EEG samples. Transmitted units are selected explicitly.
 """
 
 from __future__ import annotations
@@ -38,10 +36,14 @@ from __future__ import annotations
 import logging
 import multiprocessing as mp
 import queue
+import threading
 import time
+from collections import deque
 from typing import List, Optional
 
 import numpy as np
+
+from .impedance import ImpedanceReading, impedance_scale
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +59,25 @@ WRITE_UUID = "2d30c083-f39f-4ce6-923f-3484ea480596"   # host -> board (commands)
 SCALE_UV_PER_COUNT = 1.2e6 / (8388607.0 * 1.5 * 51.0)
 
 NUM_EEG = 4  # the Ganglion has 4 EEG channels
+
+
+def decode_impedance(packet: bytes, timestamp: Optional[float] = None,
+                     units: str = "kohms") -> Optional[ImpedanceReading]:
+    """Decode ID201..205 + ASCII integer + Z, with explicit firmware units.
+
+    Current OpenBCI firmware converts resistance to kOhm before loadInt(); older
+    protocol docs specify Ohm. BrainFlow forwards the numeric field unchanged.
+    See OpenBCI_Ganglion_Library.cpp:testImpedance and ganglion_native.cpp:read_data.
+    """
+    scale = impedance_scale(units)
+    if len(packet) < 3 or not 201 <= packet[0] <= 205:
+        return None
+    text, separator, _ = packet[1:].partition(b"Z")
+    text = text.strip()
+    if not separator or not text.isdigit():
+        return None
+    return ImpedanceReading(time.time() if timestamp is None else timestamp,
+                            int(packet[0]) - 201, float(int(text)) * scale)
 
 
 def _sign_extend(value: int, bits: int) -> int:
@@ -146,8 +167,9 @@ class GanglionDecoder:
             return True  # fresh start, or right after an id-0 anchor reference
         if packet_id == self._last_id + 1:
             return True
-        # band wrap: from near the top (>=198) back down to near the bottom (<=101)
-        if self._last_id >= 198 and packet_id <= 101:
+        # Accept only exact band wraps. A near-wrap jump (e.g. 198->100)
+        # still skipped a packet and must take the gap path below.
+        if (self._last_id, packet_id) in ((199, 100), (200, 101)):
             return True
         return False
 
@@ -221,7 +243,8 @@ class GanglionDecoder:
 # ---------------------------------------------------------------------------
 # Subprocess BLE worker (runs in a child process; CoreBluetooth-legal on macOS)
 # ---------------------------------------------------------------------------
-def _ble_worker_main(address, timeout, data_q, ctrl_q, status_q, decode_mode="delta") -> None:  # pragma: no cover - needs hardware
+def _ble_worker_main(address, timeout, data_q, ctrl_q, status_q, decode_mode="delta",
+                     impedance_q=None, impedance_units="kohms", reply_q=None) -> None:  # pragma: no cover - needs hardware
     """Child-process entry point: connect, stream, decode, ship chunks home."""
     import asyncio
 
@@ -238,6 +261,11 @@ def _ble_worker_main(address, timeout, data_q, ctrl_q, status_q, decode_mode="de
             # Never let a decode hiccup propagate into bleak's callback machinery
             # (an unhandled exception there can tear down the notification loop).
             try:
+                if data and 201 <= data[0] <= 205:
+                    reading = decode_impedance(bytes(data), units=impedance_units)
+                    if reading is not None and impedance_q is not None:
+                        impedance_q.put(reading)
+                    return
                 before = decoder.dropped
                 samples = decoder.decode(bytes(data))
                 if not samples:
@@ -267,6 +295,7 @@ def _ble_worker_main(address, timeout, data_q, ctrl_q, status_q, decode_mode="de
         status_q.put(("connected", ""))
 
         notifying = False
+        acquisition_mode = "eeg"
         try:
             while True:
                 try:
@@ -278,12 +307,47 @@ def _ble_worker_main(address, timeout, data_q, ctrl_q, status_q, decode_mode="de
                     if not notifying:
                         await client.start_notify(NOTIFY_UUID, on_notify)
                         notifying = True
-                    await client.write_gatt_char(WRITE_UUID, b"b", response=False)
+                    acquisition_mode = arg or "eeg"
+                    await client.write_gatt_char(WRITE_UUID,
+                                                b"z" if acquisition_mode == "impedance" else b"b",
+                                                response=False)
                 elif kind == "stop":
-                    await client.write_gatt_char(WRITE_UUID, b"s", response=False)
+                    await client.write_gatt_char(WRITE_UUID,
+                                                b"Z" if acquisition_mode == "impedance" else b"s",
+                                                response=False)
                     if notifying:
                         await client.stop_notify(NOTIFY_UUID)
                         notifying = False
+                elif kind == "mode":
+                    if notifying:
+                        await client.write_gatt_char(WRITE_UUID,
+                            b"Z" if acquisition_mode == "impedance" else b"s", response=False)
+                    acquisition_mode = arg
+                    if notifying:
+                        await client.write_gatt_char(WRITE_UUID,
+                            b"z" if acquisition_mode == "impedance" else b"b", response=False)
+                elif kind == "switch":
+                    mode, request_id = arg
+                    stopped_at = None
+                    try:
+                        if notifying:
+                            await client.write_gatt_char(WRITE_UUID,
+                                b"Z" if acquisition_mode == "impedance" else b"s", response=False)
+                            stopped_at = time.time()
+                        if mode is not None:
+                            if not notifying:
+                                await client.start_notify(NOTIFY_UUID, on_notify)
+                                notifying = True
+                            acquisition_mode = mode
+                            if mode == "eeg":
+                                decoder._last_id = None
+                            await client.write_gatt_char(WRITE_UUID,
+                                b"z" if mode == "impedance" else b"b", response=False)
+                        if reply_q is not None:
+                            reply_q.put((request_id, None, time.time(), stopped_at))
+                    except Exception as exc:
+                        if reply_q is not None:
+                            reply_q.put((request_id, str(exc), time.time(), stopped_at))
                 elif kind == "cmd":
                     await client.write_gatt_char(WRITE_UUID, arg, response=False)
                 elif kind == "release":
@@ -321,6 +385,7 @@ class NativeGanglionClient:
         marker_channel: int,
         timeout: float = 20.0,
         decode_mode: str = "delta",
+        impedance_units: str = "kohms",
     ) -> None:
         if not address:
             raise ValueError("a BLE address/UUID is required for native connection")
@@ -331,14 +396,26 @@ class NativeGanglionClient:
         self.marker_channel = marker_channel
         self.timeout = timeout
         self.decode_mode = "msb" if decode_mode == "msb" else "delta"
+        impedance_scale(impedance_units)
+        self.impedance_units = impedance_units
+        self._acquisition_mode = "eeg"
+        self._streaming = False
 
         ctx = mp.get_context("spawn")  # required on macOS; safe everywhere
         self._data_q: mp.Queue = ctx.Queue()
         self._ctrl_q: mp.Queue = ctx.Queue()
         self._status_q: mp.Queue = ctx.Queue()
+        self._impedance_q: mp.Queue = ctx.Queue()
+        self._reply_q: mp.Queue = ctx.Queue()
+        self._request_id = 0
+        self.last_mode_switch_stopped_at: Optional[float] = None
         self._ctx = ctx
         self._proc: Optional[mp.process.BaseProcess] = None
-        self._pending_marker: Optional[float] = None
+        self._marker_lock = threading.Lock()
+        self._pending_markers = deque()
+        # (sample within the last returned chunk, code, insertion wall time).
+        # Unlike the single-value marker row, this preserves same-sample events.
+        self.last_markers = []
         self._disconnected = False
         # Per-sample BLE-loss flags aligned with the last get_board_data() return
         # (1.0 at each dropped packet). BoardManager reads this each poll.
@@ -349,7 +426,8 @@ class NativeGanglionClient:
         self._proc = self._ctx.Process(
             target=_ble_worker_main,
             args=(self.address, self.timeout, self._data_q, self._ctrl_q,
-                  self._status_q, self.decode_mode),
+                  self._status_q, self.decode_mode, self._impedance_q, self.impedance_units,
+                  self._reply_q),
             name="ganglion-ble",
             daemon=True,
         )
@@ -366,10 +444,46 @@ class NativeGanglionClient:
         logger.info("Native Ganglion connected: %s", self.address)
 
     def start_stream(self, _buffer_size: int = 0) -> None:
-        self._ctrl_q.put(("start", None))
+        self._ctrl_q.put(("start", self._acquisition_mode))
+        self._streaming = True
 
     def stop_stream(self) -> None:
         self._ctrl_q.put(("stop", None))
+        self._streaming = False
+
+    def switch_acquisition_mode(self, mode: Optional[str]) -> float:
+        """Switch a running subscription, acknowledging writes before returning.
+
+        None stops the current hardware mode without starting another. Call off
+        the GUI thread; failures are reported rather than falsely claiming EEG
+        resumed. A successful BLE write is not a hardware sample-clock sync.
+        """
+        if mode not in (None, "eeg", "impedance"):
+            raise ValueError("Invalid acquisition mode")
+        self._request_id += 1
+        self.last_mode_switch_stopped_at = None
+        request_id = self._request_id
+        self._ctrl_q.put(("switch", (mode, request_id)))
+        deadline = time.monotonic() + self.timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError("Timed out waiting for Ganglion mode switch")
+            try:
+                reply = self._reply_q.get(timeout=remaining)
+                reply_id, error, timestamp = reply[:3]
+            except queue.Empty as exc:
+                raise RuntimeError("Timed out waiting for Ganglion mode switch") from exc
+            if reply_id != request_id:
+                continue
+            self.last_mode_switch_stopped_at = reply[3] if len(reply) > 3 else None
+            if error:
+                self._streaming = False
+                raise RuntimeError(f"Ganglion mode switch failed: {error}")
+            if mode is not None:
+                self._acquisition_mode = mode
+            self._streaming = mode is not None
+            return float(timestamp)
 
     def release_session(self) -> None:
         if self._proc is not None and self._proc.is_alive():
@@ -385,12 +499,30 @@ class NativeGanglionClient:
 
     # -- commands -----------------------------------------------------------
     def config_board(self, command: str) -> str:
+        if command in ("z", "Z"):
+            self._acquisition_mode = "impedance" if command == "z" else "eeg"
+            if self._streaming:
+                self._ctrl_q.put(("mode", self._acquisition_mode))
+            return ""
         self._ctrl_q.put(("cmd", command.encode("ascii", "ignore")))
         return ""  # BrainFlow returns the board's reply string; we don't read it
 
-    def insert_marker(self, value: float) -> None:
-        # Stamp the marker on the most recent sample of the next get_board_data.
-        self._pending_marker = float(value)
+    def insert_marker(self, value: float, timestamp: Optional[float] = None) -> None:
+        """Queue an event for the first sample arriving at/after insertion.
+
+        Ganglion timestamps are host notification times, so this establishes
+        host-side ordering, not a hardware-synchronized stimulus clock.
+        """
+        event_time = time.time() if timestamp is None else float(timestamp)
+        if not np.isfinite(event_time):
+            raise ValueError("Marker timestamp must be finite")
+        with self._marker_lock:
+            self._pending_markers.append((event_time, float(value)))
+
+    def discard_pending_markers(self) -> None:
+        """Clear events at an explicit recording boundary, preventing leakage."""
+        with self._marker_lock:
+            self._pending_markers.clear()
 
     @property
     def disconnected(self) -> bool:
@@ -410,6 +542,15 @@ class NativeGanglionClient:
         return self._disconnected
 
     # -- data ---------------------------------------------------------------
+    def get_impedance_data(self) -> List[ImpedanceReading]:
+        """Drain fresh events once, including repeated identical values."""
+        readings = []
+        while True:
+            try:
+                readings.append(self._impedance_q.get_nowait())
+            except queue.Empty:
+                return readings
+
     def get_board_data(self) -> np.ndarray:
         chunks: List[np.ndarray] = []
         while True:
@@ -419,6 +560,7 @@ class NativeGanglionClient:
                 break
         if not chunks:
             self.last_loss = np.zeros(0, dtype=np.float64)
+            self.last_markers = []
             return np.zeros((self.num_rows, 0))
         block = np.concatenate(chunks, axis=1)  # (NUM_EEG+2, n): eeg + ts + loss
         self.last_loss = block[NUM_EEG + 1].copy()  # loss-flag row (kept aside)
@@ -435,7 +577,20 @@ class NativeGanglionClient:
         for i, row in enumerate(self.eeg_channels):
             out[row] = block[i]
         out[self.timestamp_channel] = block[NUM_EEG]
-        if self._pending_marker is not None and n:
-            out[self.marker_channel, -1] = self._pending_marker
-            self._pending_marker = None
+        self.last_markers = []
+        timestamps = out[self.timestamp_channel]
+        with self._marker_lock:
+            remaining = deque()
+            for timestamp, code in self._pending_markers:
+                eligible = np.flatnonzero(np.isfinite(timestamps) & (timestamps >= timestamp))
+                if not eligible.size:
+                    remaining.append((timestamp, code))
+                    continue
+                sample = int(eligible[0])
+                self.last_markers.append((sample, code, timestamp))
+                # Keep a compatibility view; last_markers is authoritative when
+                # multiple events belong to the same sample.
+                if out[self.marker_channel, sample] == 0:
+                    out[self.marker_channel, sample] = code
+            self._pending_markers = remaining
         return out

@@ -104,3 +104,28 @@ def test_empty_and_short_inputs_are_safe():
     assert res.verdict == pd.VERDICT_NO_PULSE
     t, avg = pd.pulse_triggered_average(np.zeros(10), np.array([], dtype=int), SR)
     assert t.size == 0 and avg.size == 0
+
+
+def test_fractional_sampling_rate_preserves_pulse_timing():
+    sr = 199.8
+    peaks = np.array([200, 400, 600, 800])
+
+    spacing = pd.spacing_stats(peaks, sr)
+    t, average = pd.pulse_triggered_average(np.zeros(1000), peaks, sr)
+
+    assert spacing["rate_hz"] == pytest.approx(.999, abs=1e-12)
+    assert spacing["median_s"] == pytest.approx(200 / 199.8, abs=1e-12)
+    assert t[1] - t[0] == pytest.approx(1 / sr, abs=1e-12)
+    assert average.size == t.size
+
+
+@pytest.mark.parametrize("missing", [float("nan"), float("inf")])
+def test_missing_eeg_produces_an_inconclusive_verdict_not_no_pulse(missing):
+    x, _ = _spike_train(SR, jitter_samples=0)
+    x[3 * SR:4 * SR] = missing
+
+    result = pd.diagnose(x, SR)
+
+    assert result.verdict == pd.VERDICT_INCONCLUSIVE
+    assert "unmeasured EEG" in result.message
+    assert result.peaks.size == 0

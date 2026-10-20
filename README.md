@@ -84,9 +84,30 @@ all with full control over board, channels, filters and markers.
   amplitude scale, auto-scale and marker overlays.
 - **PSD** - Welch power spectral density with log/linear Y, window length and max-freq.
 - **Spectrogram / FFT** - rolling spectrogram plus instantaneous FFT per channel.
-- **Live impedance** - per-electrode bars colour-coded good/ok/bad with an
-  impedance-over-time history (electrode characterization).
+- **Impedance acquisition** - a separate impedance-only session with channel
+  values, measurement age and time-series recording (see below).
 - **Band power** - delta / theta / alpha / beta / gamma averaged over active channels.
+
+### Impedance-only recording
+- Choose **Capture → Impedance only** on the Dashboard for a dedicated view of
+  channels 1–4 and REF, with current kΩ values, measurement age and time-series
+  graphs. EEG pauses while the board measures impedance.
+- Record timestamped measurements to an impedance CSV and metadata file; reopen
+  them with **Open impedance recording…**. Recording captures received updates
+  independently of graph refresh and preserves repeated equal measurements.
+- Select the impedance payload scale for the board's firmware: current published
+  firmware reports kΩ, while legacy firmware may report Ω. Both are normalized
+  to Ω in the recording and shown in kΩ.
+- See **[docs/IMPEDANCE.md](docs/IMPEDANCE.md)** for usage, unit validation, and
+  findings on 100 Hz EEG and intermittent impedance measurements.
+
+During an **EEG recording**, choose a duration and click **Get impedance**.
+EEG pauses for the check and resumes automatically; **Resume EEG now** ends it
+early. Four markers identify EEG stop/resume and impedance start/end (codes
+90–93). The recording preserves the interruption as a missing EEG interval and
+saves the impedance time series beside the EEG. **View impedance** in the review
+opens those measurements. Select the appropriate firmware scale on the Dashboard
+before starting either capture mode.
 
 ### Full board & plot control
 - **Channels**: enable/disable each of the 4 Ganglion channels. Toggling sends the
@@ -94,7 +115,8 @@ all with full control over board, channels, filters and markers.
 - **Filters (display only)**: band-pass (low/high/order/type), mains notch (50/60 Hz)
   and detrend. Filters never alter recorded raw data.
 - **Plot controls**: refresh rate, window, amplitude, frequency range, channel select.
-- **Impedance test**: start/stop the Ganglion LeadOff impedance test (`z`/`Z`).
+- **Impedance test**: timed checks during EEG recording, or a dedicated
+  impedance-only session, use Ganglion LeadOff (`z`/`Z`).
 
 ### Markers / annotations
 - Define marker types (label + numeric code + colour). Fire them with a button **or a

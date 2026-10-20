@@ -93,6 +93,9 @@ class SpectrogramWidget(QWidget):
         data = self._manager.recent_eeg(seconds)
         sr = self._manager.sampling_rate
         if data.shape[1] < 64:
+            self._img.clear()
+            self._fft_curve.clear()
+            self._levels = None
             return
         filtered = apply_filters(data[ch], sr, settings)
         fmax = self.fmax_spin.value()
@@ -101,17 +104,27 @@ class SpectrogramWidget(QWidget):
         if sxx.size:
             fmask = freqs <= fmax
             img = sxx[fmask, :].T  # time x freq
+            measured = img[np.isfinite(img)]
             # Recompute colour levels only occasionally - a full min/max scan
             # plus LUT rebuild (autoLevels) every frame is the main cost here.
-            if self._levels is None or self._level_frames % 16 == 0:
-                self._levels = (float(img.min()), float(img.max()))
-            self._level_frames += 1
-            self._img.setImage(img, autoLevels=False, levels=self._levels)
-            f_sel = freqs[fmask]
-            if times.size and f_sel.size:
-                self._img.setRect(pg.QtCore.QRectF(0, 0, float(times[-1]), float(f_sel[-1])))
+            if measured.size:
+                if self._levels is None or self._level_frames % 16 == 0:
+                    self._levels = (float(measured.min()), float(measured.max()))
+                self._level_frames += 1
+                self._img.setImage(img, autoLevels=False, levels=self._levels)
+                f_sel = freqs[fmask]
+                if times.size and f_sel.size:
+                    self._img.setRect(pg.QtCore.QRectF(0, 0, float(times[-1]), float(f_sel[-1])))
+            else:
+                self._img.clear()
+                self._levels = None
+        else:
+            self._img.clear()
+            self._levels = None
 
         ffreqs, fmag = compute_fft(filtered, sr)
         if ffreqs.size:
             m = ffreqs <= fmax
             self._fft_curve.setData(ffreqs[m], fmag[m])
+        else:
+            self._fft_curve.clear()

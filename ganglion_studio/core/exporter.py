@@ -12,9 +12,13 @@ widely-supported open standard.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
+
+from .packet_loss import ANNOTATION_DESCRIPTION, loss_spans
+from .eeg_gaps import IMPEDANCE_CHECK_ANNOTATION, normalise_eeg_gaps
 
 
 class ExportError(RuntimeError):
@@ -29,7 +33,7 @@ class ReviewMarker:
     code: int
     label: str
 
-    def onset(self, sampling_rate: int) -> float:
+    def onset(self, sampling_rate: float) -> float:
         return self.sample / float(sampling_rate)
 
 
@@ -79,7 +83,7 @@ def _module_available(name: str) -> bool:
 
 def build_raw(raw_data: np.ndarray, meta: dict,
               markers: Optional[List[ReviewMarker]] = None):
-    """Construct an ``mne.io.RawArray`` (EEG only) with annotations attached."""
+    """Construct an ``mne.io.RawArray`` from the recorded signal channels."""
     if not mne_available():
         raise ExportError("MNE is not installed. Run: pip install mne eeglabio edfio")
     import mne
@@ -87,21 +91,55 @@ def build_raw(raw_data: np.ndarray, meta: dict,
     if raw_data is None or raw_data.ndim != 2 or raw_data.shape[1] == 0:
         raise ExportError("Recording is empty - nothing to export.")
 
-    sfreq = int(meta.get("sampling_rate", 200))
+    try:
+        sfreq = float(meta.get("sampling_rate", 200))
+    except (TypeError, ValueError) as exc:
+        raise ExportError("Sampling rate must be a positive finite number.") from exc
+    if not np.isfinite(sfreq) or sfreq <= 0:
+        raise ExportError("Sampling rate must be a positive finite number.")
     eeg_channels = list(meta.get("eeg_channels", []))
     if not eeg_channels:
         raise ExportError("No EEG channels found in recording metadata.")
     ch_names = list(meta.get("channel_names",
                              [f"Ch{i + 1}" for i in range(len(eeg_channels))]))
+    saved_types = list(meta.get("channel_types", []))
+    ch_types = [str(saved_types[i]).lower() if i < len(saved_types) else "eeg"
+                for i in range(len(eeg_channels))]
 
     eeg = np.ascontiguousarray(raw_data[eeg_channels, :], dtype=np.float64) * 1e-6  # uV -> V
-    info = mne.create_info(ch_names=ch_names, sfreq=sfreq, ch_types="eeg")
+    try:
+        eeg_gaps = normalise_eeg_gaps(meta.get("eeg_gaps", []), eeg.shape[1], sfreq)
+    except ValueError as exc:
+        raise ExportError(f"Invalid missing EEG intervals: {exc}") from exc
+    for gap in eeg_gaps:
+        eeg[:, gap["start_sample"]:gap["start_sample"] + gap["length"]] = np.nan
+    info = mne.create_info(ch_names=ch_names, sfreq=sfreq, ch_types=ch_types)
     raw = mne.io.RawArray(eeg, info, verbose="ERROR")
+    # An explicit schema also represents zero gaps. It survives external crops,
+    # so a removed last annotation cannot revive an obsolete companion log.
+    raw.info["description"] = json.dumps({"ganglion_studio": {
+        "packet_loss_annotations": 1,
+        "eeg_gap_annotations": 1,
+        "eeg_gap_origin_first_samp": int(raw.first_samp),
+        "eeg_gaps": eeg_gaps,
+        "impedance_file": meta.get("impedance_file", ""),
+    }})
 
-    if markers:
-        onsets = [m.onset(sfreq) for m in markers]
-        durations = [0.0] * len(markers)
-        descriptions = [m.label or f"code {m.code}" for m in markers]
+    events = (list(markers) if markers is not None else
+              [ReviewMarker(**event) for event in meta.get("marker_events", [])])
+    onsets = [m.onset(sfreq) for m in events]
+    durations = [0.0] * len(events)
+    descriptions = [m.label or f"code {m.code}" for m in events]
+    for sample, length in loss_spans(meta.get("loss_samples", []),
+                                    meta.get("loss_lengths"), raw.n_times):
+        onsets.append(sample / sfreq)
+        durations.append(length / sfreq)
+        descriptions.append(ANNOTATION_DESCRIPTION)
+    for gap in eeg_gaps:
+        onsets.append(gap["start_sample"] / sfreq)
+        durations.append(gap["length"] / sfreq)
+        descriptions.append(IMPEDANCE_CHECK_ANNOTATION)
+    if onsets:
         raw.set_annotations(
             mne.Annotations(onset=onsets, duration=durations, description=descriptions),
             verbose="ERROR",
@@ -134,6 +172,22 @@ def export(path: str, fmt: str, raw_data: np.ndarray, meta: dict,
     elif fmt == "edf":
         if not _module_available("edfio"):
             raise ExportError("EDF export needs 'edfio'. Run: pip install edfio")
+        # EDF's integer signals cannot represent NaN. Only explicitly marked
+        # missing intervals may be replaced by export placeholders; their BAD
+        # duration annotations remain in the file and restore NaNs on import.
+        allowed = np.zeros(raw.n_times, dtype=bool)
+        for gap in normalise_eeg_gaps(meta.get("eeg_gaps", []), raw.n_times):
+            allowed[gap["start_sample"]:gap["start_sample"] + gap["length"]] = True
+        if not np.isfinite(raw._data[:, ~allowed]).all():
+            raise ExportError("EDF cannot store non-finite EEG samples outside annotated missing intervals.")
+        raw._data[:, allowed] = 0.0
+        # All Ganglion inputs are voltages. MNE treats MISC as unitless and
+        # writes its unscaled SI values under an EDF uV label; marking those
+        # inputs as EEG for this export keeps their physical amplitudes intact.
+        misc_channels = {name: "eeg" for name, kind in
+                         zip(raw.ch_names, raw.get_channel_types()) if kind == "misc"}
+        if misc_channels:
+            raw.set_channel_types(misc_channels, on_unit_change="ignore")
         mne.export.export_raw(path, raw, fmt="edf", overwrite=True, verbose="ERROR")
     return path
 
@@ -150,7 +204,7 @@ def _export_gdf(path: str, raw_data: np.ndarray, meta: dict,
     try:  # pragma: no cover - depends on optional native toolkit
         import biosig  # type: ignore
 
-        sfreq = int(meta.get("sampling_rate", 200))
+        sfreq = float(meta.get("sampling_rate", 200))
         eeg_channels = list(meta.get("eeg_channels", []))
         data = np.ascontiguousarray(raw_data[eeg_channels, :], dtype=np.float64)
         biosig.save(path, data.T, sfreq)  # type: ignore[attr-defined]
